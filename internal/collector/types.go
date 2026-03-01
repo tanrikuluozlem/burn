@@ -1,11 +1,22 @@
 package collector
 
+// CloudProvider represents the cloud platform
+type CloudProvider string
+
+const (
+	CloudAWS     CloudProvider = "aws"
+	CloudGCP     CloudProvider = "gcp"
+	CloudAzure   CloudProvider = "azure"
+	CloudUnknown CloudProvider = "unknown"
+)
+
 // NodeInfo holds compute and cost-relevant data for a single node
 type NodeInfo struct {
 	Name            string
 	InstanceType    string
 	Region          string
 	Zone            string
+	CloudProvider   CloudProvider
 	CPUCores        int64
 	MemoryBytes     int64
 	CPUAllocatable  int64

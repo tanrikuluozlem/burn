@@ -20,7 +20,7 @@ func (p *StaticProvider) GetHourlyPrice(instanceType, region string, isSpot bool
 
 	price, ok := regionPrices[instanceType]
 	if !ok {
-		return 0, fmt.Errorf("instance type %q not in price list for region %s (supported: t3.*, m5.*, c5.*, r5.*)", instanceType, region)
+		return 0, fmt.Errorf("instance type %q not in price list for region %s", instanceType, region)
 	}
 
 	if isSpot {

@@ -64,26 +64,54 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 
 func parseNode(node corev1.Node) NodeInfo {
 	labels := node.Labels
+	cloud := detectCloudProvider(labels)
 
 	return NodeInfo{
 		Name:           node.Name,
 		InstanceType:   labels["node.kubernetes.io/instance-type"],
 		Region:         labels["topology.kubernetes.io/region"],
 		Zone:           labels["topology.kubernetes.io/zone"],
+		CloudProvider:  cloud,
 		CPUCores:       node.Status.Capacity.Cpu().MilliValue() / 1000,
 		MemoryBytes:    node.Status.Capacity.Memory().Value(),
 		CPUAllocatable: node.Status.Allocatable.Cpu().MilliValue() / 1000,
 		MemAllocatable: node.Status.Allocatable.Memory().Value(),
-		IsSpot:         isSpotInstance(labels),
+		IsSpot:         isSpotInstance(labels, cloud),
 		Labels:         labels,
 	}
 }
 
-func isSpotInstance(labels map[string]string) bool {
+func detectCloudProvider(labels map[string]string) CloudProvider {
+	// AWS/EKS
+	if _, ok := labels["eks.amazonaws.com/nodegroup"]; ok {
+		return CloudAWS
+	}
+	// GCP/GKE
+	if _, ok := labels["cloud.google.com/gke-nodepool"]; ok {
+		return CloudGCP
+	}
+	// Azure/AKS
+	if _, ok := labels["kubernetes.azure.com/cluster"]; ok {
+		return CloudAzure
+	}
+	return CloudUnknown
+}
+
+func isSpotInstance(labels map[string]string, cloud CloudProvider) bool {
+	// AWS/EKS
 	if labels["eks.amazonaws.com/capacityType"] == "SPOT" {
 		return true
 	}
+	// Karpenter (works across clouds)
 	if labels["karpenter.sh/capacity-type"] == "spot" {
+		return true
+	}
+	// GCP/GKE preemptible
+	if labels["cloud.google.com/gke-preemptible"] == "true" {
+		return true
+	}
+	// Azure/AKS spot
+	if labels["kubernetes.azure.com/scalesetpriority"] == "spot" {
 		return true
 	}
 	return false

@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,12 +17,12 @@ type Collector struct {
 func New(kubeconfig string) (*Collector, error) {
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load kubeconfig from %s: %w", kubeconfig, err)
 	}
 
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
 	return &Collector{client: client}, nil

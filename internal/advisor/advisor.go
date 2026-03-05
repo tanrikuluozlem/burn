@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -30,6 +29,12 @@ func New(apiKey string) *Advisor {
 func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Report, error) {
 	prompt := buildPrompt(report)
 
+	tool := anthropic.ToolParam{
+		Name:        "provide_recommendations",
+		Description: anthropic.String("Provide cost optimization recommendations for the Kubernetes cluster"),
+		InputSchema: recommendationSchema,
+	}
+
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
 		MaxTokens: 2048,
@@ -41,12 +46,20 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Re
 		System: []anthropic.TextBlockParam{
 			{Text: systemPrompt},
 		},
+		Tools: []anthropic.ToolUnionParam{
+			{OfTool: &tool},
+		},
+		ToolChoice: anthropic.ToolChoiceUnionParam{
+			OfTool: &anthropic.ToolChoiceToolParam{
+				Name: "provide_recommendations",
+			},
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("claude api error: %w", err)
 	}
 
-	recommendations, summary, err := parseResponse(resp)
+	recommendations, summary, err := parseToolResponse(resp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
@@ -73,23 +86,6 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Re
 
 const systemPrompt = `You are a Kubernetes FinOps expert. Analyze cluster cost data and provide actionable recommendations.
 
-Your response must be valid JSON with this structure:
-{
-  "summary": "Brief overview of findings",
-  "recommendations": [
-    {
-      "id": "rec-1",
-      "category": "cost|performance|reliability",
-      "severity": "critical|high|medium|low",
-      "title": "Short title",
-      "description": "What the issue is",
-      "action": "Specific command or step to fix it",
-      "estimated_savings": 123.45,
-      "affected_resources": ["node-1", "node-2"]
-    }
-  ]
-}
-
 Focus on:
 - Underutilized nodes that could be downsized or removed
 - On-demand instances that could be spot instances
@@ -98,46 +94,66 @@ Focus on:
 
 Be specific. Include kubectl or terraform commands when relevant.`
 
+var recommendationSchema = anthropic.ToolInputSchemaParam{
+	Type: "object",
+	Properties: map[string]interface{}{
+		"summary": map[string]interface{}{
+			"type":        "string",
+			"description": "Brief overview of findings",
+		},
+		"recommendations": map[string]interface{}{
+			"type": "array",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id":       map[string]string{"type": "string"},
+					"category": map[string]string{"type": "string"},
+					"severity": map[string]string{"type": "string"},
+					"title":    map[string]string{"type": "string"},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "What the issue is",
+					},
+					"action": map[string]interface{}{
+						"type":        "string",
+						"description": "Specific command or step to fix it",
+					},
+					"estimated_savings": map[string]interface{}{
+						"type":        "number",
+						"description": "Monthly savings in dollars",
+					},
+					"affected_resources": map[string]interface{}{
+						"type":  "array",
+						"items": map[string]string{"type": "string"},
+					},
+				},
+				"required": []string{"id", "category", "severity", "title", "description"},
+			},
+		},
+	},
+	Required: []string{"summary", "recommendations"},
+}
+
 func buildPrompt(report *analyzer.CostReport) string {
 	data, _ := json.MarshalIndent(report, "", "  ")
 	return fmt.Sprintf("Analyze this Kubernetes cluster cost report and provide recommendations:\n\n%s", string(data))
 }
 
-type aiResponse struct {
+type toolInput struct {
 	Summary         string           `json:"summary"`
 	Recommendations []Recommendation `json:"recommendations"`
 }
 
-func parseResponse(resp *anthropic.Message) ([]Recommendation, string, error) {
-	if len(resp.Content) == 0 {
-		return nil, "", fmt.Errorf("empty response")
+func parseToolResponse(resp *anthropic.Message) ([]Recommendation, string, error) {
+	for _, block := range resp.Content {
+		switch v := block.AsAny().(type) {
+		case anthropic.ToolUseBlock:
+			var input toolInput
+			if err := json.Unmarshal([]byte(v.JSON.Input.Raw()), &input); err != nil {
+				return nil, "", fmt.Errorf("invalid tool input: %w", err)
+			}
+			return input.Recommendations, input.Summary, nil
+		}
 	}
-
-	text := resp.Content[0].Text
-	if text == "" {
-		return nil, "", fmt.Errorf("no text in response")
-	}
-
-	// extract JSON from markdown code block if present
-	text = extractJSON(text)
-
-	var result aiResponse
-	if err := json.Unmarshal([]byte(text), &result); err != nil {
-		return nil, "", fmt.Errorf("invalid json: %w", err)
-	}
-
-	return result.Recommendations, result.Summary, nil
-}
-
-func extractJSON(s string) string {
-	// remove markdown code blocks
-	if idx := strings.Index(s, "```json"); idx != -1 {
-		s = s[idx+7:]
-	} else if idx := strings.Index(s, "```"); idx != -1 {
-		s = s[idx+3:]
-	}
-	if idx := strings.LastIndex(s, "```"); idx != -1 {
-		s = s[:idx]
-	}
-	return strings.TrimSpace(s)
+	return nil, "", fmt.Errorf("no tool_use block in response")
 }

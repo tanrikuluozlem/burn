@@ -15,9 +15,17 @@ type Collector struct {
 }
 
 func New(kubeconfig string) (*Collector, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		loadingRules.ExplicitPath = kubeconfig
+	}
+
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		loadingRules,
+		&clientcmd.ConfigOverrides{},
+	).ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig from %s: %w", kubeconfig, err)
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
 
 	client, err := kubernetes.NewForConfig(config)

@@ -2,7 +2,6 @@ package pricing
 
 import "fmt"
 
-// CloudProvider fetches pricing with static fallback
 type CloudProvider struct {
 	fallback *StaticProvider
 }

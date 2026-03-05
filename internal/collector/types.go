@@ -1,6 +1,5 @@
 package collector
 
-// CloudProvider represents the cloud platform
 type CloudProvider string
 
 const (
@@ -10,7 +9,6 @@ const (
 	CloudUnknown CloudProvider = "unknown"
 )
 
-// NodeInfo holds compute and cost-relevant data for a single node
 type NodeInfo struct {
 	Name            string
 	InstanceType    string
@@ -26,7 +24,6 @@ type NodeInfo struct {
 	Pods            []PodInfo
 }
 
-// PodInfo holds resource requests and limits for a single pod
 type PodInfo struct {
 	Name          string
 	Namespace     string
@@ -36,7 +33,6 @@ type PodInfo struct {
 	MemoryLimit   int64
 }
 
-// ClusterInfo aggregates all collected data
 type ClusterInfo struct {
 	Nodes      []NodeInfo
 	TotalNodes int

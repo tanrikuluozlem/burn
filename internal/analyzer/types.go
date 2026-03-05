@@ -2,7 +2,6 @@ package analyzer
 
 import "time"
 
-// CostReport is the main output of the analyzer
 type CostReport struct {
 	GeneratedAt   time.Time
 	TotalNodes    int
@@ -14,7 +13,6 @@ type CostReport struct {
 	WasteAnalysis WasteAnalysis
 }
 
-// NodeCost represents cost breakdown for a single node
 type NodeCost struct {
 	Name         string
 	InstanceType string
@@ -28,13 +26,11 @@ type NodeCost struct {
 	Utilization  float64 // average of CPU and memory
 }
 
-// WasteAnalysis identifies underutilized resources
 type WasteAnalysis struct {
 	UnderutilizedNodes []UnderutilizedNode
 	PotentialSavings   float64
 }
 
-// UnderutilizedNode represents a node with low resource requests
 type UnderutilizedNode struct {
 	Name           string
 	Utilization    float64

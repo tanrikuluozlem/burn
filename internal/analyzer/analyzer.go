@@ -13,17 +13,14 @@ const (
 	underutilizedThreshold = 0.3 // 30% utilization considered wasteful
 )
 
-// Analyzer calculates costs and detects waste
 type Analyzer struct {
 	pricing pricing.Provider
 }
 
-// New creates an analyzer with the given pricing provider
 func New(p pricing.Provider) *Analyzer {
 	return &Analyzer{pricing: p}
 }
 
-// Analyze processes cluster data and returns a cost report
 func (a *Analyzer) Analyze(info *collector.ClusterInfo) (*CostReport, error) {
 	report := &CostReport{
 		GeneratedAt: time.Now().UTC(),

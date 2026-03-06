@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -21,7 +22,7 @@ func New(p pricing.Provider) *Analyzer {
 	return &Analyzer{pricing: p}
 }
 
-func (a *Analyzer) Analyze(info *collector.ClusterInfo) (*CostReport, error) {
+func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*CostReport, error) {
 	report := &CostReport{
 		GeneratedAt: time.Now().UTC(),
 		TotalNodes:  info.TotalNodes,
@@ -33,7 +34,7 @@ func (a *Analyzer) Analyze(info *collector.ClusterInfo) (*CostReport, error) {
 	var skipped int
 
 	for _, node := range info.Nodes {
-		nc, err := a.calculateNodeCost(node)
+		nc, err := a.calculateNodeCost(ctx, node)
 		if err != nil {
 			slog.Warn("failed to calculate node cost",
 				"node", node.Name,
@@ -70,8 +71,8 @@ func (a *Analyzer) Analyze(info *collector.ClusterInfo) (*CostReport, error) {
 	return report, nil
 }
 
-func (a *Analyzer) calculateNodeCost(node collector.NodeInfo) (NodeCost, error) {
-	price, err := a.pricing.GetHourlyPrice(node.InstanceType, node.Region, node.IsSpot)
+func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInfo) (NodeCost, error) {
+	price, err := a.pricing.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 	if err != nil {
 		return NodeCost{}, err
 	}

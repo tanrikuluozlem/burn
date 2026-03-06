@@ -1,0 +1,13 @@
+.git
+.gitignore
+.github
+*.md
+LICENSE
+Dockerfile
+.dockerignore
+bin/
+dist/
+*.exe
+*.test
+*.out
+.env*

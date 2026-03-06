@@ -11,6 +11,7 @@ import (
 // CloudPricingProvider routes pricing requests to the appropriate cloud provider
 type CloudPricingProvider struct {
 	aws      *AWSProvider
+	azure    *AzureProvider
 	fallback *StaticProvider
 }
 
@@ -22,6 +23,7 @@ func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error)
 
 	return &CloudPricingProvider{
 		aws:      aws,
+		azure:    NewAzureProvider(),
 		fallback: NewStaticProvider(),
 	}, nil
 }
@@ -59,7 +61,22 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 
 	case collector.CloudAzure:
-		// TODO: implement Azure pricing
+		if p.azure != nil {
+			price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
+			if err == nil {
+				slog.Debug("using Azure pricing API",
+					"instance", node.InstanceType,
+					"region", node.Region,
+					"price", price,
+				)
+				return price, nil
+			}
+			slog.Warn("Azure pricing failed, using fallback",
+				"instance", node.InstanceType,
+				"region", node.Region,
+				"error", err,
+			)
+		}
 		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 
 	default:

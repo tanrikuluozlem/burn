@@ -1,6 +1,9 @@
 package pricing
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 type StaticProvider struct {
 	prices map[string]map[string]float64 // region -> instanceType -> price
@@ -12,7 +15,7 @@ func NewStaticProvider() *StaticProvider {
 	}
 }
 
-func (p *StaticProvider) GetHourlyPrice(instanceType, region string, isSpot bool) (float64, error) {
+func (p *StaticProvider) GetHourlyPrice(_ context.Context, instanceType, region string, isSpot bool) (float64, error) {
 	regionPrices, ok := p.prices[region]
 	if !ok {
 		regionPrices = p.prices["us-east-1"] // fallback

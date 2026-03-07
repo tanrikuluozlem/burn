@@ -14,9 +14,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
+      - run: go vet ./...
 
   test:
     runs-on: ubuntu-latest

@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "burn.fullname" . }}
+  labels:
+    {{- include "burn.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "burn.selectorLabels" . | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "burn.serviceAccountName" . }}
+          restartPolicy: OnFailure
+          containers:
+            - name: {{ .Chart.Name }}
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["burn"]
+              args: ["analyze", "--ai"]
+              env:
+                {{- range $key, $value := .Values.env }}
+                - name: {{ $key }}
+                  value: {{ $value | quote }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}

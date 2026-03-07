@@ -1,0 +1,24 @@
+replicaCount: 1
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+env:
+  ANTHROPIC_API_KEY: ""
+  LOG_LEVEL: "info"
+
+schedule: "0 */6 * * *"

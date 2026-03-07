@@ -1,0 +1,5 @@
+apiVersion: v2
+name: burn
+description: FinOps tool for Kubernetes cost analysis and optimization
+version: 0.1.0
+appVersion: '0.1.0'

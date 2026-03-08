@@ -1,20 +1,25 @@
-name: Release
+name: Deploy to Dev
 
 on:
-  push:
-    branches: [main]
-    tags:
-      - 'v*'
+  pull_request:
+    paths-ignore:
+      - 'terraform/**'
+      - '*.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
 
 env:
   AWS_REGION: eu-central-1
 
 jobs:
   build-and-push:
+    environment: dev
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -34,22 +39,13 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set image tag
-        id: tag
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          else
-            echo "TAG=${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: false
           load: true
-          tags: ${{ steps.ecr.outputs.registry }}/burn:${{ steps.tag.outputs.TAG }}
+          tags: ${{ steps.ecr.outputs.registry }}/burn:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -57,7 +53,7 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ steps.ecr.outputs.registry }}/burn:${{ steps.tag.outputs.TAG }}
+          image-ref: ${{ steps.ecr.outputs.registry }}/burn:${{ github.sha }}
           format: 'table'
           exit-code: '1'
           ignore-unfixed: true
@@ -69,19 +65,33 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.ecr.outputs.registry }}/burn:${{ steps.tag.outputs.TAG }}
+          tags: ${{ steps.ecr.outputs.registry }}/burn:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
-  release:
+  deploy:
     needs: build-and-push
-    if: startsWith(github.ref, 'refs/tags/v')
+    environment: dev
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          generate_release_notes: true
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: ${{ github.actor }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name burn-cluster --region ${{ env.AWS_REGION }}
+
+      - name: Deploy to dev namespace
+        run: |
+          helm upgrade --install burn ./charts/burn \
+            --namespace dev \
+            --create-namespace \
+            --set image.repository=${{ vars.ECR_REGISTRY }}/burn \
+            --set image.tag=${{ github.sha }}

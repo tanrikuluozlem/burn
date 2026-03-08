@@ -1,0 +1,52 @@
+name: Deploy to Prod
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+
+jobs:
+  deploy:
+    environment: prod
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: ${{ github.actor }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Tag image for prod
+        run: |
+          docker pull ${{ steps.ecr.outputs.registry }}/burn:qa
+          docker tag ${{ steps.ecr.outputs.registry }}/burn:qa ${{ steps.ecr.outputs.registry }}/burn:${{ github.event.release.tag_name }}
+          docker push ${{ steps.ecr.outputs.registry }}/burn:${{ github.event.release.tag_name }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name burn-cluster --region ${{ env.AWS_REGION }}
+
+      - name: Deploy to prod namespace
+        run: |
+          helm upgrade --install burn ./charts/burn \
+            --namespace prod \
+            --create-namespace \
+            --set image.repository=${{ vars.ECR_REGISTRY }}/burn \
+            --set image.tag=${{ github.event.release.tag_name }}

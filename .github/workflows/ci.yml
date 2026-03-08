@@ -3,8 +3,20 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'terraform/**'
+      - 'charts/**'
+      - '*.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'terraform/**'
+      - 'charts/**'
+      - '*.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -14,6 +26,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
       - run: go vet ./...
 
   test:
@@ -23,6 +36,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
       - run: go test -race -coverprofile=coverage.out ./...
 
   build:
@@ -32,4 +46,5 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
       - run: go build -o burn ./cmd/burn

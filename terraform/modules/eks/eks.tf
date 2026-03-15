@@ -133,18 +133,51 @@ resource "aws_eks_node_group" "this" {
   }
 }
 
+resource "aws_iam_role" "eks_admin" {
+  name = "${local.name_prefix}-eks-admin"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+      }
+    }]
+  })
+}
+
 resource "aws_eks_access_entry" "admin" {
   cluster_name  = aws_eks_cluster.this.name
-  principal_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+  principal_arn = aws_iam_role.eks_admin.arn
   type          = "STANDARD"
 }
 
 resource "aws_eks_access_policy_association" "admin" {
   cluster_name  = aws_eks_cluster.this.name
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-  principal_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+  principal_arn = aws_iam_role.eks_admin.arn
 
   access_scope {
     type = "cluster"
   }
+}
+
+resource "aws_iam_group" "devops" {
+  name = "devops"
+}
+
+resource "aws_iam_group_policy" "devops_eks_admin" {
+  name  = "eks-admin-assume"
+  group = aws_iam_group.devops.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action   = "sts:AssumeRole"
+      Effect   = "Allow"
+      Resource = aws_iam_role.eks_admin.arn
+    }]
+  })
 }

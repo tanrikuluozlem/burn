@@ -28,7 +28,7 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.GH_OIDC_ROLE_ARN }}
           role-session-name: ${{ github.actor }}-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
@@ -81,12 +81,12 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.GH_OIDC_ROLE_ARN }}
           role-session-name: ${{ github.actor }}-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name burn-cluster --region ${{ env.AWS_REGION }}
+        run: aws eks update-kubeconfig --name burn-prod-eks --region ${{ env.AWS_REGION }}
 
       - name: Deploy to dev namespace
         run: |

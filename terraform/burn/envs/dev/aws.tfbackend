@@ -1,0 +1,4 @@
+bucket       = "burn-tfstate-prod"
+key          = "burn-app-dev"
+region       = "eu-central-1"
+use_lockfile = true

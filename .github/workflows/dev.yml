@@ -92,6 +92,5 @@ jobs:
         run: |
           helm upgrade --install burn ./charts/burn \
             --namespace dev \
-            --create-namespace \
             --set image.repository=${{ vars.ECR_REGISTRY }}/burn \
             --set image.tag=${{ github.sha }}

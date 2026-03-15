@@ -1,4 +1,0 @@
-region       = "eu-central-1"
-bucket       = "burn-tfstate-prod"
-key          = "burn-qa-infra"
-use_lockfile = true

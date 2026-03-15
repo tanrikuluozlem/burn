@@ -16,7 +16,7 @@ vpc_private_subnets = {
   "eu-central-1b" = "10.0.20.0/24"
 }
 
-kubernetes_version = "1.31"
+kubernetes_version = "1.34"
 
 node_groups = {
   "default" = {

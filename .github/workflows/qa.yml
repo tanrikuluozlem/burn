@@ -30,7 +30,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.GH_OIDC_ROLE_ARN }}
-          role-session-name: ${{ github.actor }}-${{ github.run_id }}
+          role-session-name: gha-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Set up Docker Buildx
@@ -87,7 +87,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.GH_OIDC_ROLE_ARN }}
-          role-session-name: ${{ github.actor }}-${{ github.run_id }}
+          role-session-name: gha-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Update kubeconfig

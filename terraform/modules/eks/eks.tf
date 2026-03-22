@@ -111,6 +111,7 @@ resource "aws_eks_node_group" "this" {
   node_role_arn   = aws_iam_role.node_group.arn
   subnet_ids      = var.private_subnet_ids
   instance_types  = [each.value.instance_type]
+  capacity_type   = each.value.capacity_type
 
   scaling_config {
     desired_size = each.value.min_size

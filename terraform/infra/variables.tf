@@ -25,6 +25,7 @@ variable "kubernetes_version" {
 variable "node_groups" {
   type = map(object({
     instance_type = string
+    capacity_type = string
     min_size      = number
     max_size      = number
   }))

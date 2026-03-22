@@ -19,8 +19,15 @@ vpc_private_subnets = {
 kubernetes_version = "1.34"
 
 node_groups = {
-  "default" = {
+  "system" = {
+    instance_type = "t3.medium"
+    capacity_type = "ON_DEMAND"
+    min_size      = 2
+    max_size      = 3
+  }
+  "workload" = {
     instance_type = "t3.small"
+    capacity_type = "SPOT"
     min_size      = 1
     max_size      = 3
   }

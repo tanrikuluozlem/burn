@@ -8,7 +8,6 @@ import (
 	"github.com/ozlemtanrikulu/burn/internal/collector"
 )
 
-// CloudPricingProvider routes pricing requests to the appropriate cloud provider
 type CloudPricingProvider struct {
 	aws      *AWSProvider
 	azure    *AzureProvider
@@ -18,9 +17,8 @@ type CloudPricingProvider struct {
 func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error) {
 	aws, err := NewAWSProvider(ctx)
 	if err != nil {
-		slog.Warn("failed to initialize AWS pricing, using static fallback", "error", err)
+		slog.Debug("aws pricing unavailable, using fallback", "err", err)
 	}
-
 	return &CloudPricingProvider{
 		aws:      aws,
 		azure:    NewAzureProvider(),
@@ -32,50 +30,20 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 	switch node.CloudProvider {
 	case collector.CloudAWS:
 		if p.aws != nil {
-			price, err := p.aws.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
-			if err == nil {
-				slog.Debug("using AWS pricing API",
-					"instance", node.InstanceType,
-					"region", node.Region,
-					"price", price,
-				)
+			if price, err := p.aws.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot); err == nil {
 				return price, nil
 			}
-			slog.Warn("AWS pricing failed, using fallback",
-				"instance", node.InstanceType,
-				"region", node.Region,
-				"error", err,
-			)
 		}
-		// fallback to static
-		price, err := p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
-		slog.Debug("using static pricing fallback",
-			"instance", node.InstanceType,
-			"region", node.Region,
-			"price", price,
-		)
-		return price, err
+		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 
 	case collector.CloudGCP:
-		// TODO: implement GCP pricing
 		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 
 	case collector.CloudAzure:
 		if p.azure != nil {
-			price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
-			if err == nil {
-				slog.Debug("using Azure pricing API",
-					"instance", node.InstanceType,
-					"region", node.Region,
-					"price", price,
-				)
+			if price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot); err == nil {
 				return price, nil
 			}
-			slog.Warn("Azure pricing failed, using fallback",
-				"instance", node.InstanceType,
-				"region", node.Region,
-				"error", err,
-			)
 		}
 		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 
@@ -84,12 +52,9 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 	}
 }
 
-// GetHourlyPrice implements Provider interface for backwards compatibility
 func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
-	// without cloud info, try AWS first then fallback
 	if p.aws != nil {
-		price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, isSpot)
-		if err == nil {
+		if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, isSpot); err == nil {
 			return price, nil
 		}
 	}

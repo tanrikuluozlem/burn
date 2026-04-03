@@ -16,10 +16,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/pricing/types"
 )
 
-// AWSProvider fetches real-time pricing from AWS APIs
 type AWSProvider struct {
-	pricingClient *pricing.Client        // for on-demand prices (us-east-1 only)
-	ec2Clients    map[string]*ec2.Client // per-region clients for spot prices
+	pricingClient *pricing.Client
+	ec2Clients    map[string]*ec2.Client
 	cache         map[string]cachedPrice
 	mu            sync.RWMutex
 }
@@ -30,12 +29,10 @@ type cachedPrice struct {
 }
 
 func NewAWSProvider(ctx context.Context) (*AWSProvider, error) {
-	// pricing API only available in us-east-1
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return nil, err
 	}
-
 	return &AWSProvider{
 		pricingClient: pricing.NewFromConfig(cfg),
 		ec2Clients:    make(map[string]*ec2.Client),
@@ -44,35 +41,28 @@ func NewAWSProvider(ctx context.Context) (*AWSProvider, error) {
 }
 
 func (p *AWSProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
-	cacheKey := fmt.Sprintf("%s:%s:%v", instanceType, region, isSpot)
+	key := fmt.Sprintf("%s:%s:%v", instanceType, region, isSpot)
 
-	// check cache first
 	p.mu.RLock()
-	if cached, ok := p.cache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
 		p.mu.RUnlock()
-		return cached.price, nil
+		return c.price, nil
 	}
 	p.mu.RUnlock()
 
 	var price float64
 	var err error
-
 	if isSpot {
 		price, err = p.getSpotPrice(ctx, instanceType, region)
 	} else {
 		price, err = p.getOnDemandPrice(ctx, instanceType, region)
 	}
-
 	if err != nil {
 		return 0, err
 	}
 
-	// cache for 1 hour
 	p.mu.Lock()
-	p.cache[cacheKey] = cachedPrice{
-		price:     price,
-		expiresAt: time.Now().Add(1 * time.Hour),
-	}
+	p.cache[key] = cachedPrice{price: price, expiresAt: time.Now().Add(time.Hour)}
 	p.mu.Unlock()
 
 	return price, nil
@@ -120,11 +110,10 @@ func (p *AWSProvider) getOnDemandPrice(ctx context.Context, instanceType, region
 
 	result, err := p.pricingClient.GetProducts(ctx, input)
 	if err != nil {
-		return 0, fmt.Errorf("pricing API error: %w", err)
+		return 0, err
 	}
-
 	if len(result.PriceList) == 0 {
-		return 0, fmt.Errorf("no pricing found for %s in %s", instanceType, region)
+		return 0, fmt.Errorf("no pricing for %s in %s", instanceType, region)
 	}
 
 	return parseOnDemandPrice(result.PriceList[0])
@@ -147,44 +136,34 @@ func (p *AWSProvider) getSpotPrice(ctx context.Context, instanceType, region str
 
 	result, err := client.DescribeSpotPriceHistory(ctx, input)
 	if err != nil {
-		return 0, fmt.Errorf("spot price API error: %w", err)
+		return 0, err
 	}
-
 	if len(result.SpotPriceHistory) == 0 {
-		return 0, fmt.Errorf("no spot pricing found for %s in %s", instanceType, region)
+		return 0, fmt.Errorf("no spot pricing for %s in %s", instanceType, region)
 	}
-
-	price, err := strconv.ParseFloat(*result.SpotPriceHistory[0].SpotPrice, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid spot price: %w", err)
-	}
-
-	return price, nil
+	return strconv.ParseFloat(*result.SpotPriceHistory[0].SpotPrice, 64)
 }
 
 func (p *AWSProvider) getEC2Client(ctx context.Context, region string) (*ec2.Client, error) {
 	p.mu.RLock()
-	if client, ok := p.ec2Clients[region]; ok {
+	if c, ok := p.ec2Clients[region]; ok {
 		p.mu.RUnlock()
-		return client, nil
+		return c, nil
 	}
 	p.mu.RUnlock()
 
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config for region %s: %w", region, err)
+		return nil, err
 	}
 
-	client := ec2.NewFromConfig(cfg)
-
+	c := ec2.NewFromConfig(cfg)
 	p.mu.Lock()
-	p.ec2Clients[region] = client
+	p.ec2Clients[region] = c
 	p.mu.Unlock()
-
-	return client, nil
+	return c, nil
 }
 
-// parseOnDemandPrice extracts hourly USD price from AWS pricing API response
 func parseOnDemandPrice(priceJSON string) (float64, error) {
 	var data struct {
 		Terms struct {
@@ -197,27 +176,19 @@ func parseOnDemandPrice(priceJSON string) (float64, error) {
 			} `json:"OnDemand"`
 		} `json:"terms"`
 	}
-
 	if err := json.Unmarshal([]byte(priceJSON), &data); err != nil {
-		return 0, fmt.Errorf("failed to parse price JSON: %w", err)
+		return 0, err
 	}
-
 	for _, offer := range data.Terms.OnDemand {
 		for _, dim := range offer.PriceDimensions {
 			if dim.PricePerUnit.USD != "" {
-				price, err := strconv.ParseFloat(dim.PricePerUnit.USD, 64)
-				if err != nil {
-					return 0, fmt.Errorf("invalid price value: %w", err)
-				}
-				return price, nil
+				return strconv.ParseFloat(dim.PricePerUnit.USD, 64)
 			}
 		}
 	}
-
-	return 0, fmt.Errorf("no USD price found in response")
+	return 0, fmt.Errorf("no USD price in response")
 }
 
-// awsRegionToCode converts AWS region ID to location name used by Pricing API
 func awsRegionToCode(region string) string {
 	regionMap := map[string]string{
 		"us-east-1":      "US East (N. Virginia)",

@@ -28,7 +28,6 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 		},
 	}
 
-	// Add node summary if there are nodes
 	if len(report.Nodes) > 0 {
 		nodeLines := make([]string, 0, len(report.Nodes))
 		for _, n := range report.Nodes {
@@ -49,7 +48,6 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 		})
 	}
 
-	// Add waste analysis if there are underutilized nodes
 	if len(report.WasteAnalysis.UnderutilizedNodes) > 0 {
 		blocks = append(blocks, Block{
 			Type: "divider",
@@ -104,7 +102,6 @@ func FormatAIReport(report *advisor.Report) *Message {
 		})
 	}
 
-	// Add recommendations
 	for i, rec := range report.Recommendations {
 		severity := severityEmoji(rec.Severity)
 		recText := fmt.Sprintf("%s *%d. %s*\n%s", severity, i+1, rec.Title, rec.Description)

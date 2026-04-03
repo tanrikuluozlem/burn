@@ -10,18 +10,20 @@ const (
 )
 
 type NodeInfo struct {
-	Name            string
-	InstanceType    string
-	Region          string
-	Zone            string
-	CloudProvider   CloudProvider
-	CPUCores        int64
-	MemoryBytes     int64
-	CPUAllocatable  int64
-	MemAllocatable  int64
-	IsSpot          bool
-	Labels          map[string]string
-	Pods            []PodInfo
+	Name           string
+	InstanceType   string
+	Region         string
+	Zone           string
+	CloudProvider  CloudProvider
+	CPUCores       int64
+	MemoryBytes    int64
+	CPUAllocatable int64
+	MemAllocatable int64
+	CPUUsage       float64
+	MemoryUsage    int64
+	IsSpot         bool
+	Labels         map[string]string
+	Pods           []PodInfo
 }
 
 type PodInfo struct {
@@ -31,6 +33,8 @@ type PodInfo struct {
 	CPULimit      int64
 	MemoryRequest int64
 	MemoryLimit   int64
+	CPUUsage      float64
+	MemoryUsage   int64
 }
 
 type ClusterInfo struct {

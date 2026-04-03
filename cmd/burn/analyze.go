@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	namespace  string
-	kubeconfig string
-	output     string
-	withAI     bool
-	verbose    bool
+	namespace     string
+	kubeconfig    string
+	prometheusURL string
+	output        string
+	withAI        bool
+	verbose       bool
 )
 
 var analyzeCmd = &cobra.Command{
@@ -34,6 +35,7 @@ func init() {
 	f := analyzeCmd.Flags()
 	f.StringVarP(&namespace, "namespace", "n", "", "target namespace (default: all)")
 	f.StringVar(&kubeconfig, "kubeconfig", "", "path to kubeconfig file")
+	f.StringVar(&prometheusURL, "prometheus", "", "Prometheus server URL for usage metrics")
 	f.StringVarP(&output, "output", "o", "table", "output format (table|json)")
 	f.BoolVar(&withAI, "ai", false, "get AI-powered recommendations")
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
@@ -51,7 +53,7 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	coll, err := collector.New(kubeconfig)
+	coll, err := collector.New(kubeconfig, prometheusURL)
 	if err != nil {
 		return fmt.Errorf("failed to create collector: %w", err)
 	}

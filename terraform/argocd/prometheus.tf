@@ -65,7 +65,7 @@ resource "helm_release" "prometheus_stack" {
         passwordKey: admin-password
       service:
         type: NodePort
-        nodePort: 30080
+        nodePort: 30090
       persistence:
         enabled: false
       defaultDashboardsEnabled: true

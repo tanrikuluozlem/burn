@@ -39,29 +39,21 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Re
 		Model:     a.model,
 		MaxTokens: 2048,
 		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(
-				anthropic.NewTextBlock(prompt),
-			),
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
-		System: []anthropic.TextBlockParam{
-			{Text: systemPrompt},
-		},
-		Tools: []anthropic.ToolUnionParam{
-			{OfTool: &tool},
-		},
+		System: []anthropic.TextBlockParam{{Text: systemPrompt}},
+		Tools:  []anthropic.ToolUnionParam{{OfTool: &tool}},
 		ToolChoice: anthropic.ToolChoiceUnionParam{
-			OfTool: &anthropic.ToolChoiceToolParam{
-				Name: "provide_recommendations",
-			},
+			OfTool: &anthropic.ToolChoiceToolParam{Name: "provide_recommendations"},
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("claude api error: %w", err)
+		return nil, err
 	}
 
 	recommendations, summary, err := parseToolResponse(resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, err
 	}
 
 	var totalSavings float64
@@ -96,33 +88,33 @@ Be specific. Include kubectl or terraform commands when relevant.`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",
-	Properties: map[string]interface{}{
-		"summary": map[string]interface{}{
+	Properties: map[string]any{
+		"summary": map[string]any{
 			"type":        "string",
 			"description": "Brief overview of findings",
 		},
-		"recommendations": map[string]interface{}{
+		"recommendations": map[string]any{
 			"type": "array",
-			"items": map[string]interface{}{
+			"items": map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
+				"properties": map[string]any{
 					"id":       map[string]string{"type": "string"},
 					"category": map[string]string{"type": "string"},
 					"severity": map[string]string{"type": "string"},
 					"title":    map[string]string{"type": "string"},
-					"description": map[string]interface{}{
+					"description": map[string]any{
 						"type":        "string",
 						"description": "What the issue is",
 					},
-					"action": map[string]interface{}{
+					"action": map[string]any{
 						"type":        "string",
-						"description": "Specific command or step to fix it",
+						"description": "Specific command or step to fix",
 					},
-					"estimated_savings": map[string]interface{}{
+					"estimated_savings": map[string]any{
 						"type":        "number",
-						"description": "Monthly savings in dollars",
+						"description": "Monthly savings in USD",
 					},
-					"affected_resources": map[string]interface{}{
+					"affected_resources": map[string]any{
 						"type":  "array",
 						"items": map[string]string{"type": "string"},
 					},
@@ -146,14 +138,13 @@ type toolInput struct {
 
 func parseToolResponse(resp *anthropic.Message) ([]Recommendation, string, error) {
 	for _, block := range resp.Content {
-		switch v := block.AsAny().(type) {
-		case anthropic.ToolUseBlock:
+		if v, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
 			var input toolInput
 			if err := json.Unmarshal([]byte(v.JSON.Input.Raw()), &input); err != nil {
-				return nil, "", fmt.Errorf("invalid tool input: %w", err)
+				return nil, "", err
 			}
 			return input.Recommendations, input.Summary, nil
 		}
 	}
-	return nil, "", fmt.Errorf("no tool_use block in response")
+	return nil, "", fmt.Errorf("no tool_use block")
 }

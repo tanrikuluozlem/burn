@@ -40,11 +40,9 @@ type promResult struct {
 }
 
 func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResult, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/query", p.baseURL)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/v1/query", nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
 
 	q := url.Values{}
@@ -53,23 +51,22 @@ func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResul
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("prometheus: %d", resp.StatusCode)
 	}
 
 	var result promResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, err
 	}
 
 	if result.Status != "success" {
-		return nil, fmt.Errorf("query failed with status: %s", result.Status)
+		return nil, fmt.Errorf("prometheus: %s", result.Status)
 	}
-
 	return result.Data.Result, nil
 }
 
@@ -162,11 +159,11 @@ func (p *PrometheusClient) GetPodMemoryUsage(ctx context.Context) (map[string]in
 
 func parseValue(v []any) (float64, error) {
 	if len(v) < 2 {
-		return 0, fmt.Errorf("invalid value format")
+		return 0, fmt.Errorf("invalid value")
 	}
-	str, ok := v[1].(string)
+	s, ok := v[1].(string)
 	if !ok {
-		return 0, fmt.Errorf("value is not a string")
+		return 0, fmt.Errorf("not a string")
 	}
-	return strconv.ParseFloat(str, 64)
+	return strconv.ParseFloat(s, 64)
 }

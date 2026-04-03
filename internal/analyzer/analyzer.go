@@ -48,7 +48,6 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 		totalHourly += nc.HourlyPrice
 		report.Nodes = append(report.Nodes, nc)
 
-		// check for underutilization
 		if nc.Utilization < underutilizedThreshold {
 			report.WasteAnalysis.UnderutilizedNodes = append(
 				report.WasteAnalysis.UnderutilizedNodes,
@@ -77,8 +76,7 @@ func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInf
 		return NodeCost{}, err
 	}
 
-	// calculate resource request percentages
-	cpuPct := resourcePercentage(sumPodCPU(node.Pods), node.CPUAllocatable*1000) // convert cores to milli
+	cpuPct := resourcePercentage(sumPodCPU(node.Pods), node.CPUAllocatable*1000)
 	memPct := resourcePercentage(sumPodMemory(node.Pods), node.MemAllocatable)
 
 	return NodeCost{

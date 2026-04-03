@@ -1,5 +1,3 @@
-replicaCount: 1
-
 image:
   repository: ""
   tag: ""
@@ -17,8 +15,15 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-env:
-  ANTHROPIC_API_KEY: ""
-  LOG_LEVEL: "info"
+schedule: "0 9 * * *"
 
-schedule: "0 */6 * * *"
+report:
+  includeAI: true
+
+prometheus:
+  url: "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
+
+secrets:
+  existingSecret: "burn-secrets"
+  slackWebhookKey: "slack-webhook-url"
+  anthropicApiKey: "anthropic-api-key"

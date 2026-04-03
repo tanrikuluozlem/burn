@@ -8,30 +8,6 @@ resource "kubectl_manifest" "monitoring_namespace" {
   })
 }
 
-resource "random_password" "grafana_admin" {
-  length           = 24
-  special          = true
-  override_special = "!#%&*"
-}
-
-resource "kubectl_manifest" "grafana_admin_secret" {
-  yaml_body = yamlencode({
-    apiVersion = "v1"
-    kind       = "Secret"
-    metadata = {
-      name      = "grafana-admin"
-      namespace = "monitoring"
-    }
-    type = "Opaque"
-    stringData = {
-      admin-user     = "admin"
-      admin-password = random_password.grafana_admin.result
-    }
-  })
-
-  depends_on = [kubectl_manifest.monitoring_namespace]
-}
-
 resource "helm_release" "prometheus_stack" {
   namespace  = "monitoring"
   name       = "prometheus"
@@ -90,6 +66,6 @@ resource "helm_release" "prometheus_stack" {
 
   depends_on = [
     kubectl_manifest.monitoring_namespace,
-    kubectl_manifest.grafana_admin_secret
+    kubectl_manifest.external_secret_grafana
   ]
 }

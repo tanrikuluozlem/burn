@@ -1,9 +1,3 @@
-output "grafana_admin_password" {
-  description = "Grafana admin password"
-  value       = random_password.grafana_admin.result
-  sensitive   = true
-}
-
 output "grafana_url" {
   description = "Grafana URL (NodePort)"
   value       = "http://<NODE_IP>:30090"

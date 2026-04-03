@@ -5,4 +5,4 @@ metadata:
   labels:
     {{- include "burn.labels" . | nindent 4 }}
 data:
-  LOG_LEVEL: {{ .Values.env.LOG_LEVEL | quote }}
+  LOG_LEVEL: "info"

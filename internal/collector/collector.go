@@ -11,10 +11,11 @@ import (
 )
 
 type Collector struct {
-	client kubernetes.Interface
+	client     kubernetes.Interface
+	prometheus *PrometheusClient
 }
 
-func New(kubeconfig string) (*Collector, error) {
+func New(kubeconfig, prometheusURL string) (*Collector, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
 		loadingRules.ExplicitPath = kubeconfig
@@ -33,7 +34,13 @@ func New(kubeconfig string) (*Collector, error) {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
-	return &Collector{client: client}, nil
+	c := &Collector{client: client}
+
+	if prometheusURL != "" {
+		c.prometheus = NewPrometheusClient(prometheusURL)
+	}
+
+	return c, nil
 }
 
 func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
@@ -63,11 +70,49 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		nodeInfos = append(nodeInfos, nodeInfo)
 	}
 
+	// Enrich with Prometheus metrics if available
+	if c.prometheus != nil {
+		c.enrichWithMetrics(ctx, nodeInfos)
+	}
+
 	return &ClusterInfo{
 		Nodes:      nodeInfos,
 		TotalNodes: len(nodeInfos),
 		TotalPods:  len(pods.Items),
 	}, nil
+}
+
+func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
+	// Fetch node metrics
+	nodeCPU, _ := c.prometheus.GetNodeCPUUsage(ctx)
+	nodeMem, _ := c.prometheus.GetNodeMemoryUsage(ctx)
+
+	// Fetch pod metrics
+	podCPU, _ := c.prometheus.GetPodCPUUsage(ctx)
+	podMem, _ := c.prometheus.GetPodMemoryUsage(ctx)
+
+	// Enrich nodes
+	for i := range nodes {
+		nodeName := nodes[i].Name
+		if cpu, ok := nodeCPU[nodeName]; ok {
+			nodes[i].CPUUsage = cpu
+		}
+		if mem, ok := nodeMem[nodeName]; ok {
+			nodes[i].MemoryUsage = mem
+		}
+
+		// Enrich pods on this node
+		for j := range nodes[i].Pods {
+			pod := &nodes[i].Pods[j]
+			key := pod.Namespace + "/" + pod.Name
+			if cpu, ok := podCPU[key]; ok {
+				pod.CPUUsage = cpu
+			}
+			if mem, ok := podMem[key]; ok {
+				pod.MemoryUsage = mem
+			}
+		}
+	}
 }
 
 func parseNode(node corev1.Node) NodeInfo {
@@ -84,7 +129,7 @@ func parseNode(node corev1.Node) NodeInfo {
 		MemoryBytes:    node.Status.Capacity.Memory().Value(),
 		CPUAllocatable: node.Status.Allocatable.Cpu().MilliValue() / 1000,
 		MemAllocatable: node.Status.Allocatable.Memory().Value(),
-		IsSpot:         isSpotInstance(labels, cloud),
+		IsSpot:         isSpotInstance(labels),
 		Labels:         labels,
 	}
 }
@@ -105,7 +150,7 @@ func detectCloudProvider(labels map[string]string) CloudProvider {
 	return CloudUnknown
 }
 
-func isSpotInstance(labels map[string]string, cloud CloudProvider) bool {
+func isSpotInstance(labels map[string]string) bool {
 	// AWS/EKS
 	if labels["eks.amazonaws.com/capacityType"] == "SPOT" {
 		return true

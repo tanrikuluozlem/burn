@@ -12,3 +12,4 @@ variable "app_namespace" {
   type        = string
   description = "Namespace where burn app will be deployed"
 }
+

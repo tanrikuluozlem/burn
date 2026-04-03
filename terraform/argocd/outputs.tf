@@ -6,7 +6,7 @@ output "grafana_admin_password" {
 
 output "grafana_url" {
   description = "Grafana URL (NodePort)"
-  value       = "http://<NODE_IP>:30080"
+  value       = "http://<NODE_IP>:30090"
 }
 
 output "prometheus_url" {

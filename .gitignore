@@ -1,3 +1,4 @@
 /burn
 .env
 .DS_Store
+*.out

@@ -1,5 +1,9 @@
 data "aws_caller_identity" "current" {}
 
+locals {
+  oidc_provider = replace(data.terraform_remote_state.infra.outputs.oidc_provider_url, "https://", "")
+}
+
 data "aws_iam_policy_document" "external_secrets_assume" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -7,13 +11,13 @@ data "aws_iam_policy_document" "external_secrets_assume" {
 
     condition {
       test     = "StringEquals"
-      variable = "${data.terraform_remote_state.infra.outputs.oidc_provider}:sub"
+      variable = "${local.oidc_provider}:sub"
       values   = ["system:serviceaccount:external-secrets:external-secrets"]
     }
 
     condition {
       test     = "StringEquals"
-      variable = "${data.terraform_remote_state.infra.outputs.oidc_provider}:aud"
+      variable = "${local.oidc_provider}:aud"
       values   = ["sts.amazonaws.com"]
     }
 

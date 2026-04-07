@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ozlemtanrikulu/burn/actions/workflows/ci.yml/badge.svg)](https://github.com/ozlemtanrikulu/burn/actions/workflows/ci.yml)
 
-Kubernetes FinOps CLI that analyzes cluster costs and recommends optimizations.
+Your Kubernetes cluster is burning money. Find out where.
 
 ## Why
 

@@ -84,7 +84,9 @@ Focus on:
 - Right-sizing opportunities
 - Consolidation possibilities
 
-Be specific. Include kubectl or terraform commands when relevant.`
+IMPORTANT: Recommendations must be non-overlapping. Do not suggest both "remove a node" and "convert that same node to spot" - pick the better option. Each resource should appear in only ONE recommendation. Estimated savings must be realistic and not double-count the same resource.
+
+Be specific. Include kubectl or eksctl commands when relevant.`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",

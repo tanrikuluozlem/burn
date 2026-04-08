@@ -71,7 +71,8 @@ func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResul
 }
 
 func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]float64, error) {
-	query := `sum(rate(node_cpu_seconds_total{mode!="idle"}[5m])) by (node)`
+	// Use instance label (standard node-exporter) - try node label first (kube-prometheus-stack)
+	query := `sum(rate(node_cpu_seconds_total{mode!="idle"}[5m])) by (instance)`
 	results, err := p.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -80,6 +81,9 @@ func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]floa
 	usage := make(map[string]float64)
 	for _, r := range results {
 		node := r.Metric["node"]
+		if node == "" {
+			node = r.Metric["instance"]
+		}
 		if node == "" {
 			continue
 		}
@@ -91,7 +95,8 @@ func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]floa
 }
 
 func (p *PrometheusClient) GetNodeMemoryUsage(ctx context.Context) (map[string]int64, error) {
-	query := `node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes`
+	// Group by instance to get per-node memory usage
+	query := `(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) by (instance)`
 	results, err := p.Query(ctx, query)
 	if err != nil {
 		return nil, err

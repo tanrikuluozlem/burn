@@ -22,9 +22,15 @@ func TestStaticProviderSpot(t *testing.T) {
 	p := NewStaticProvider()
 
 	price, _ := p.GetHourlyPrice(context.Background(), "t3.medium", "us-east-1", true)
-	expected := 0.0416 * 0.3
-	if price != expected {
-		t.Errorf("spot price = %v, want %v", price, expected)
+	// Spot price is 35% of on-demand (65% discount)
+	expected := 0.0416 * 0.35
+	// Use tolerance for floating point comparison
+	diff := price - expected
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 0.0001 {
+		t.Errorf("spot price = %v, want ~%v", price, expected)
 	}
 }
 

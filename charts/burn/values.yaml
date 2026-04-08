@@ -27,3 +27,4 @@ secrets:
   existingSecret: "burn-secrets"
   slackWebhookKey: "slack-webhook-url"
   anthropicApiKey: "anthropic-api-key"
+

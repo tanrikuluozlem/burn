@@ -46,6 +46,16 @@ resource "kubectl_manifest" "app_burn" {
         path           = "charts/burn"
         helm = {
           valueFiles = ["values.yaml"]
+          parameters = [
+            {
+              name  = "image.repository"
+              value = var.ecr_repository
+            },
+            {
+              name  = "image.tag"
+              value = var.image_tag
+            }
+          ]
         }
       }
       destination = {

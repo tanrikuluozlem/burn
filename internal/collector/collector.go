@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"log"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -84,12 +85,24 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 
 func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 	// Fetch node metrics
-	nodeCPU, _ := c.prometheus.GetNodeCPUUsage(ctx)
-	nodeMem, _ := c.prometheus.GetNodeMemoryUsage(ctx)
+	nodeCPU, err := c.prometheus.GetNodeCPUUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get node CPU metrics: %v", err)
+	}
+	nodeMem, err := c.prometheus.GetNodeMemoryUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get node memory metrics: %v", err)
+	}
 
 	// Fetch pod metrics
-	podCPU, _ := c.prometheus.GetPodCPUUsage(ctx)
-	podMem, _ := c.prometheus.GetPodMemoryUsage(ctx)
+	podCPU, err := c.prometheus.GetPodCPUUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get pod CPU metrics: %v", err)
+	}
+	podMem, err := c.prometheus.GetPodMemoryUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get pod memory metrics: %v", err)
+	}
 
 	// Enrich nodes
 	for i := range nodes {

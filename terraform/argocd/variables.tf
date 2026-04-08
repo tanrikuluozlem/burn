@@ -13,3 +13,14 @@ variable "app_namespace" {
   description = "Namespace where burn app will be deployed"
 }
 
+variable "ecr_repository" {
+  type        = string
+  description = "ECR repository URL for burn image"
+}
+
+variable "image_tag" {
+  type        = string
+  description = "Image tag to deploy"
+  default     = "latest"
+}
+

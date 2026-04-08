@@ -27,7 +27,9 @@ func (p *StaticProvider) GetHourlyPrice(_ context.Context, instanceType, region 
 	}
 
 	if isSpot {
-		return price * 0.3, nil // spot ~70% discount
+		// Spot instances typically cost 30-50% of on-demand price (50-70% discount)
+		// Using 0.35 as conservative estimate (65% discount)
+		return price * 0.35, nil
 	}
 	return price, nil
 }
@@ -66,6 +68,17 @@ func defaultPrices() map[string]map[string]float64 {
 			"t3.small":   0.0228,
 			"t3.medium":  0.0456,
 			"t3.large":   0.0912,
+			"m5.large":   0.107,
+			"m5.xlarge":  0.214,
+			"c5.large":   0.096,
+			"c5.xlarge":  0.192,
+		},
+		"eu-central-1": {
+			"t3.micro":   0.0116,
+			"t3.small":   0.0232,
+			"t3.medium":  0.0464,
+			"t3.large":   0.0928,
+			"t3.xlarge":  0.1856,
 			"m5.large":   0.107,
 			"m5.xlarge":  0.214,
 			"c5.large":   0.096,

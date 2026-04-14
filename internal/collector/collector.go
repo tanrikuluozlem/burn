@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -104,13 +105,22 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 		log.Printf("warning: failed to get pod memory metrics: %v", err)
 	}
 
-	// Enrich nodes
+	// remap by IP for matching (prometheus uses 10.0.1.5:9100, k8s uses ip-10-0-1-5.ec2.internal)
+	cpuByIP := make(map[string]float64)
+	memByIP := make(map[string]int64)
+	for k, v := range nodeCPU {
+		cpuByIP[extractIP(k)] = v
+	}
+	for k, v := range nodeMem {
+		memByIP[extractIP(k)] = v
+	}
+
 	for i := range nodes {
-		nodeName := nodes[i].Name
-		if cpu, ok := nodeCPU[nodeName]; ok {
+		ip := extractIPFromNodeName(nodes[i].Name)
+		if cpu, ok := cpuByIP[ip]; ok {
 			nodes[i].CPUUsage = cpu
 		}
-		if mem, ok := nodeMem[nodeName]; ok {
+		if mem, ok := memByIP[ip]; ok {
 			nodes[i].MemoryUsage = mem
 		}
 
@@ -181,6 +191,22 @@ func isSpotInstance(labels map[string]string) bool {
 		return true
 	}
 	return false
+}
+
+func extractIP(s string) string {
+	if idx := strings.LastIndex(s, ":"); idx != -1 {
+		return s[:idx]
+	}
+	return s
+}
+
+func extractIPFromNodeName(name string) string {
+	if strings.HasPrefix(name, "ip-") {
+		parts := strings.SplitN(name, ".", 2)
+		ip := strings.TrimPrefix(parts[0], "ip-")
+		return strings.ReplaceAll(ip, "-", ".")
+	}
+	return name
 }
 
 func parsePod(pod corev1.Pod) PodInfo {

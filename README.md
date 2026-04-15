@@ -92,8 +92,8 @@ Waste Analysis:
 ## How it Works
 
 ```
-K8s API → Collector → Analyzer → Advisor (Claude) → Slack
-              ↓            ↓
+K8s API → Collector → Analyzer → Advisor (Claude) → Output
+              ↑            ↑
          Prometheus    Pricing API
          (optional)    (AWS/Azure)
 ```

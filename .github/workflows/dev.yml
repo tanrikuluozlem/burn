@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.GH_OIDC_ROLE_ARN }}
           role-session-name: gha-${{ github.run_id }}
@@ -81,7 +81,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.GH_OIDC_ROLE_ARN }}
           role-session-name: gha-${{ github.run_id }}

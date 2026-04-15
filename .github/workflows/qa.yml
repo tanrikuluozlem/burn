@@ -1,11 +1,12 @@
 name: Deploy to QA
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'terraform/**'
-      - '*.md'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to deploy'
+        required: true
+        default: 'main'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

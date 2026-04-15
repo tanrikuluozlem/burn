@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ozlemtanrikulu/burn/internal/advisor"
-	"github.com/ozlemtanrikulu/burn/internal/analyzer"
+	"github.com/tanrikuluozlem/burn/internal/advisor"
+	"github.com/tanrikuluozlem/burn/internal/analyzer"
 )
 
 func TestFormatCostReport(t *testing.T) {

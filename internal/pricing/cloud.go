@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ozlemtanrikulu/burn/internal/collector"
+	"github.com/tanrikuluozlem/burn/internal/collector"
 )
 
 type CloudPricingProvider struct {

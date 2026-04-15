@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ozlemtanrikulu/burn/internal/advisor"
-	"github.com/ozlemtanrikulu/burn/internal/analyzer"
+	"github.com/tanrikuluozlem/burn/internal/advisor"
+	"github.com/tanrikuluozlem/burn/internal/analyzer"
 )
 
 func FormatCostReport(report *analyzer.CostReport) *Message {

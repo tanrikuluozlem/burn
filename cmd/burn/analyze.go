@@ -9,11 +9,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/ozlemtanrikulu/burn/internal/advisor"
-	"github.com/ozlemtanrikulu/burn/internal/analyzer"
-	"github.com/ozlemtanrikulu/burn/internal/collector"
-	"github.com/ozlemtanrikulu/burn/internal/pricing"
-	"github.com/ozlemtanrikulu/burn/internal/slack"
+	"github.com/tanrikuluozlem/burn/internal/advisor"
+	"github.com/tanrikuluozlem/burn/internal/analyzer"
+	"github.com/tanrikuluozlem/burn/internal/collector"
+	"github.com/tanrikuluozlem/burn/internal/pricing"
+	"github.com/tanrikuluozlem/burn/internal/slack"
 	"github.com/spf13/cobra"
 )
 

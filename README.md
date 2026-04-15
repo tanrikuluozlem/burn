@@ -1,6 +1,6 @@
 # burn
 
-[![CI](https://github.com/ozlemtanrikulu/burn/actions/workflows/ci.yml/badge.svg)](https://github.com/ozlemtanrikulu/burn/actions/workflows/ci.yml)
+[![CI](https://github.com/tanrikuluozlem/burn/actions/workflows/ci.yml/badge.svg)](https://github.com/tanrikuluozlem/burn/actions/workflows/ci.yml)
 
 Your Kubernetes cluster is burning money. Find out where.
 
@@ -12,15 +12,16 @@ Running Kubernetes in production gets expensive fast. Most teams overprovision b
 
 - Per-node cost breakdown (hourly/monthly)
 - Waste detection for underutilized resources
-- Optimization recommendations via Claude
+- AI recommendations via Claude (`--ai`)
+- Natural language questions (`burn ask`)
 - Multi-cloud pricing: AWS, Azure (spot aware)
-- Slack reports for daily cost updates
-- Prometheus integration for real usage metrics
+- Slack integration (`--slack`)
+- Prometheus integration for real usage metrics (`--prometheus`)
 
 ## Install
 
 ```bash
-go install github.com/ozlemtanrikulu/burn/cmd/burn@latest
+go install github.com/tanrikuluozlem/burn/cmd/burn@latest
 ```
 
 ## Quick Start
@@ -32,8 +33,11 @@ burn analyze
 # With AI recommendations
 burn analyze --ai
 
+# Ask questions about costs
+burn ask "which nodes should I convert to spot?"
+
 # Send report to Slack
-burn report --ai
+burn analyze --ai --slack
 ```
 
 ## Configuration
@@ -42,9 +46,8 @@ Environment variables:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `PROMETHEUS_URL` | Prometheus server URL | No |
-| `ANTHROPIC_API_KEY` | Claude API key (for --ai) | For AI |
-| `SLACK_WEBHOOK_URL` | Slack webhook (for report) | For Slack |
+| `ANTHROPIC_API_KEY` | Claude API key | For `--ai` and `ask` |
+| `SLACK_WEBHOOK_URL` | Slack webhook URL | For `--slack` |
 
 ## Usage
 
@@ -55,8 +58,13 @@ burn analyze -n production
 # JSON output
 burn analyze -o json
 
-# Verbose mode
-burn analyze -v
+# With Prometheus metrics
+burn analyze --prometheus http://prometheus:9090
+
+# Ask questions
+burn ask "why is this node so expensive?"
+burn ask "how can I reduce costs?"
+burn ask "what's the risk of using spot instances?"
 ```
 
 ## Sample Output
@@ -117,7 +125,7 @@ spec:
           containers:
           - name: burn
             image: your-registry/burn:latest
-            args: ["report", "--ai"]
+            args: ["analyze", "--ai", "--slack"]
             envFrom:
             - secretRef:
                 name: burn-secrets

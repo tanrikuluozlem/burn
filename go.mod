@@ -1,4 +1,4 @@
-module github.com/ozlemtanrikulu/burn
+module github.com/tanrikuluozlem/burn
 
 go 1.26
 

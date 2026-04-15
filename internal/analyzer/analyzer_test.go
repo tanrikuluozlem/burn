@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ozlemtanrikulu/burn/internal/collector"
+	"github.com/tanrikuluozlem/burn/internal/collector"
 )
 
 type mockPricing struct {

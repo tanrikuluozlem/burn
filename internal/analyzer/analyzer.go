@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ozlemtanrikulu/burn/internal/collector"
-	"github.com/ozlemtanrikulu/burn/internal/pricing"
+	"github.com/tanrikuluozlem/burn/internal/collector"
+	"github.com/tanrikuluozlem/burn/internal/pricing"
 )
 
 const (

@@ -13,6 +13,7 @@ import (
 	"github.com/ozlemtanrikulu/burn/internal/analyzer"
 	"github.com/ozlemtanrikulu/burn/internal/collector"
 	"github.com/ozlemtanrikulu/burn/internal/pricing"
+	"github.com/ozlemtanrikulu/burn/internal/slack"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,8 @@ var (
 	output        string
 	withAI        bool
 	verbose       bool
+	sendToSlack   bool
+	slackWebhook  string
 )
 
 var analyzeCmd = &cobra.Command{
@@ -39,6 +42,8 @@ func init() {
 	f.StringVarP(&output, "output", "o", "table", "output format (table|json)")
 	f.BoolVar(&withAI, "ai", false, "get AI-powered recommendations")
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	f.BoolVar(&sendToSlack, "slack", false, "send report to Slack")
+	f.StringVar(&slackWebhook, "slack-webhook", "", "Slack webhook URL (or set SLACK_WEBHOOK_URL)")
 
 	rootCmd.AddCommand(analyzeCmd)
 }
@@ -95,6 +100,27 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	outputAIReport(aiReport)
+
+	// Send to Slack if requested
+	if sendToSlack {
+		webhook := slackWebhook
+		if webhook == "" {
+			webhook = os.Getenv("SLACK_WEBHOOK_URL")
+		}
+		if webhook == "" {
+			return fmt.Errorf("--slack requires --slack-webhook or SLACK_WEBHOOK_URL env var")
+		}
+
+		sc := slack.NewWebhookClient(webhook)
+		if err := sc.Send(ctx, slack.FormatCostReport(report)); err != nil {
+			return fmt.Errorf("failed to send cost report to Slack: %w", err)
+		}
+		if err := sc.Send(ctx, slack.FormatAIReport(aiReport)); err != nil {
+			return fmt.Errorf("failed to send AI report to Slack: %w", err)
+		}
+		fmt.Println("\n✓ Report sent to Slack")
+	}
+
 	return nil
 }
 

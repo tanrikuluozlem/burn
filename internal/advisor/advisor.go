@@ -150,3 +150,46 @@ func parseToolResponse(resp *anthropic.Message) ([]Recommendation, string, error
 	}
 	return nil, "", fmt.Errorf("no tool_use block")
 }
+
+// Ask answers natural language questions about the cluster costs
+func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question string) (string, error) {
+	reportJSON, _ := json.MarshalIndent(report, "", "  ")
+
+	prompt := fmt.Sprintf(`Here is the current Kubernetes cluster cost report:
+
+%s
+
+User question: %s
+
+Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, question)
+
+	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     a.model,
+		MaxTokens: 1024,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		},
+		System: []anthropic.TextBlockParam{{Text: askSystemPrompt}},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	for _, block := range resp.Content {
+		if v, ok := block.AsAny().(anthropic.TextBlock); ok {
+			return v.Text, nil
+		}
+	}
+
+	return "", fmt.Errorf("no text response")
+}
+
+const askSystemPrompt = `You are a Kubernetes FinOps expert assistant. You help users understand their cluster costs and find optimization opportunities.
+
+Guidelines:
+- Be conversational but concise
+- Use specific data from the cluster report (node names, actual costs, utilization percentages)
+- When suggesting actions, provide exact kubectl/eksctl commands
+- Explain trade-offs (e.g., spot instances are cheaper but can be interrupted)
+- If you don't have enough data to answer, say so
+- Format numbers clearly ($X.XX for costs, X% for percentages)`

@@ -22,12 +22,27 @@ spec:
             - name: {{ .Chart.Name }}
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              command: ["burn"]
-              args: ["analyze", "--ai"]
+              args:
+                - report
+                {{- if .Values.report.includeAI }}
+                - --ai
+                {{- end }}
               env:
-                {{- range $key, $value := .Values.env }}
-                - name: {{ $key }}
-                  value: {{ $value | quote }}
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.existingSecret }}
+                      key: {{ .Values.secrets.slackWebhookKey }}
+                {{- if .Values.report.includeAI }}
+                - name: ANTHROPIC_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.existingSecret }}
+                      key: {{ .Values.secrets.anthropicApiKey }}
+                {{- end }}
+                {{- if .Values.prometheus.url }}
+                - name: PROMETHEUS_URL
+                  value: {{ .Values.prometheus.url | quote }}
                 {{- end }}
               resources:
                 {{- toYaml .Values.resources | nindent 16 }}

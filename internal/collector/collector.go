@@ -3,6 +3,8 @@ package collector
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,10 +13,11 @@ import (
 )
 
 type Collector struct {
-	client kubernetes.Interface
+	client     kubernetes.Interface
+	prometheus *PrometheusClient
 }
 
-func New(kubeconfig string) (*Collector, error) {
+func New(kubeconfig, prometheusURL string) (*Collector, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
 		loadingRules.ExplicitPath = kubeconfig
@@ -33,7 +36,13 @@ func New(kubeconfig string) (*Collector, error) {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
-	return &Collector{client: client}, nil
+	c := &Collector{client: client}
+
+	if prometheusURL != "" {
+		c.prometheus = NewPrometheusClient(prometheusURL)
+	}
+
+	return c, nil
 }
 
 func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
@@ -63,11 +72,70 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		nodeInfos = append(nodeInfos, nodeInfo)
 	}
 
+	// Enrich with Prometheus metrics if available
+	if c.prometheus != nil {
+		c.enrichWithMetrics(ctx, nodeInfos)
+	}
+
 	return &ClusterInfo{
 		Nodes:      nodeInfos,
 		TotalNodes: len(nodeInfos),
 		TotalPods:  len(pods.Items),
 	}, nil
+}
+
+func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
+	// Fetch node metrics
+	nodeCPU, err := c.prometheus.GetNodeCPUUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get node CPU metrics: %v", err)
+	}
+	nodeMem, err := c.prometheus.GetNodeMemoryUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get node memory metrics: %v", err)
+	}
+
+	// Fetch pod metrics
+	podCPU, err := c.prometheus.GetPodCPUUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get pod CPU metrics: %v", err)
+	}
+	podMem, err := c.prometheus.GetPodMemoryUsage(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get pod memory metrics: %v", err)
+	}
+
+	// remap by IP for matching (prometheus uses 10.0.1.5:9100, k8s uses ip-10-0-1-5.ec2.internal)
+	cpuByIP := make(map[string]float64)
+	memByIP := make(map[string]int64)
+	for k, v := range nodeCPU {
+		cpuByIP[extractIP(k)] = v
+	}
+	for k, v := range nodeMem {
+		memByIP[extractIP(k)] = v
+	}
+
+	for i := range nodes {
+		ip := extractIPFromNodeName(nodes[i].Name)
+		if cpu, ok := cpuByIP[ip]; ok {
+			nodes[i].CPUUsage = cpu
+		}
+		if mem, ok := memByIP[ip]; ok {
+			nodes[i].MemoryUsage = mem
+		}
+
+		// Enrich pods on this node
+		for j := range nodes[i].Pods {
+			pod := &nodes[i].Pods[j]
+			key := pod.Namespace + "/" + pod.Name
+			if cpu, ok := podCPU[key]; ok {
+				pod.CPUUsage = cpu
+			}
+			if mem, ok := podMem[key]; ok {
+				pod.MemoryUsage = mem
+			}
+		}
+	}
 }
 
 func parseNode(node corev1.Node) NodeInfo {
@@ -84,7 +152,7 @@ func parseNode(node corev1.Node) NodeInfo {
 		MemoryBytes:    node.Status.Capacity.Memory().Value(),
 		CPUAllocatable: node.Status.Allocatable.Cpu().MilliValue() / 1000,
 		MemAllocatable: node.Status.Allocatable.Memory().Value(),
-		IsSpot:         isSpotInstance(labels, cloud),
+		IsSpot:         isSpotInstance(labels),
 		Labels:         labels,
 	}
 }
@@ -105,7 +173,7 @@ func detectCloudProvider(labels map[string]string) CloudProvider {
 	return CloudUnknown
 }
 
-func isSpotInstance(labels map[string]string, cloud CloudProvider) bool {
+func isSpotInstance(labels map[string]string) bool {
 	// AWS/EKS
 	if labels["eks.amazonaws.com/capacityType"] == "SPOT" {
 		return true
@@ -123,6 +191,22 @@ func isSpotInstance(labels map[string]string, cloud CloudProvider) bool {
 		return true
 	}
 	return false
+}
+
+func extractIP(s string) string {
+	if idx := strings.LastIndex(s, ":"); idx != -1 {
+		return s[:idx]
+	}
+	return s
+}
+
+func extractIPFromNodeName(name string) string {
+	if strings.HasPrefix(name, "ip-") {
+		parts := strings.SplitN(name, ".", 2)
+		ip := strings.TrimPrefix(parts[0], "ip-")
+		return strings.ReplaceAll(ip, "-", ".")
+	}
+	return name
 }
 
 func parsePod(pod corev1.Pod) PodInfo {

@@ -1,8 +1,11 @@
 name: Deploy to Prod
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to deploy'
+        required: true
 
 concurrency:
   group: production
@@ -21,13 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.GH_OIDC_ROLE_ARN }}
-          role-session-name: ${{ github.actor }}-${{ github.run_id }}
+          role-session-name: gha-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to Amazon ECR
@@ -47,6 +50,5 @@ jobs:
         run: |
           helm upgrade --install burn ./charts/burn \
             --namespace prod \
-            --create-namespace \
             --set image.repository=${{ vars.ECR_REGISTRY }}/burn \
             --set image.tag=${{ github.event.release.tag_name }}

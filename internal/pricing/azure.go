@@ -12,7 +12,6 @@ import (
 
 const azurePricingAPI = "https://prices.azure.com/api/retail/prices"
 
-// AzureProvider fetches real-time pricing from Azure Retail Prices API
 type AzureProvider struct {
 	client *http.Client
 	cache  map[string]cachedPrice
@@ -27,12 +26,12 @@ func NewAzureProvider() *AzureProvider {
 }
 
 func (p *AzureProvider) GetHourlyPrice(ctx context.Context, vmSize, region string, isSpot bool) (float64, error) {
-	cacheKey := fmt.Sprintf("%s:%s:%v", vmSize, region, isSpot)
+	key := fmt.Sprintf("%s:%s:%v", vmSize, region, isSpot)
 
 	p.mu.RLock()
-	if cached, ok := p.cache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
 		p.mu.RUnlock()
-		return cached.price, nil
+		return c.price, nil
 	}
 	p.mu.RUnlock()
 
@@ -42,17 +41,12 @@ func (p *AzureProvider) GetHourlyPrice(ctx context.Context, vmSize, region strin
 	}
 
 	p.mu.Lock()
-	p.cache[cacheKey] = cachedPrice{
-		price:     price,
-		expiresAt: time.Now().Add(1 * time.Hour),
-	}
+	p.cache[key] = cachedPrice{price: price, expiresAt: time.Now().Add(time.Hour)}
 	p.mu.Unlock()
-
 	return price, nil
 }
 
 func (p *AzureProvider) fetchPrice(ctx context.Context, vmSize, region string, isSpot bool) (float64, error) {
-	// build OData filter
 	priceType := "Consumption"
 	if isSpot {
 		priceType = "Spot"
@@ -62,41 +56,37 @@ func (p *AzureProvider) fetchPrice(ctx context.Context, vmSize, region string, i
 		"serviceName eq 'Virtual Machines' and armRegionName eq '%s' and armSkuName eq '%s' and priceType eq '%s'",
 		region, vmSize, priceType,
 	)
-
 	reqURL := fmt.Sprintf("%s?$filter=%s", azurePricingAPI, url.QueryEscape(filter))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create request: %w", err)
+		return 0, err
 	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("azure pricing API error: %w", err)
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("azure pricing API returned status %d", resp.StatusCode)
+		return 0, fmt.Errorf("azure: %d", resp.StatusCode)
 	}
 
 	var result azurePricingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, fmt.Errorf("failed to decode response: %w", err)
+		return 0, err
 	}
 
-	// find Linux price (not Windows)
 	for _, item := range result.Items {
 		if item.ProductName != "" && !isWindowsProduct(item.ProductName) {
 			return item.RetailPrice, nil
 		}
 	}
-
 	if len(result.Items) > 0 {
 		return result.Items[0].RetailPrice, nil
 	}
-
-	return 0, fmt.Errorf("no pricing found for %s in %s", vmSize, region)
+	return 0, fmt.Errorf("no pricing for %s in %s", vmSize, region)
 }
 
 type azurePricingResponse struct {
@@ -111,7 +101,6 @@ type azurePriceItem struct {
 	MeterName   string  `json:"meterName"`
 }
 
-func isWindowsProduct(productName string) bool {
-	// filter out Windows VMs
-	return len(productName) > 7 && productName[len(productName)-7:] == "Windows"
+func isWindowsProduct(name string) bool {
+	return len(name) > 7 && name[len(name)-7:] == "Windows"
 }

@@ -14,6 +14,7 @@ Running Kubernetes in production gets expensive fast. Most teams overprovision b
 - Waste detection for underutilized resources
 - AI recommendations via Claude (`--ai`)
 - Natural language questions (`burn ask`)
+- Slack slash commands (`burn serve`)
 - Multi-cloud pricing: AWS, Azure (spot aware)
 - Slack integration (`--slack`)
 - Prometheus integration for real usage metrics (`--prometheus`)
@@ -46,8 +47,9 @@ Environment variables:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `ANTHROPIC_API_KEY` | Claude API key | For `--ai` and `ask` |
+| `ANTHROPIC_API_KEY` | Claude API key | For `--ai`, `ask`, `serve` |
 | `SLACK_WEBHOOK_URL` | Slack webhook URL | For `--slack` |
+| `SLACK_SIGNING_SECRET` | Slack app signing secret | For `serve` |
 
 ## Usage
 
@@ -66,6 +68,36 @@ burn ask "why is this node so expensive?"
 burn ask "how can I reduce costs?"
 burn ask "what's the risk of using spot instances?"
 ```
+
+## Slack Slash Commands
+
+Run `burn serve` to enable Slack slash commands:
+
+```bash
+burn serve --port 8080
+```
+
+### Setup
+
+1. Create a Slack App at https://api.slack.com/apps
+2. Add a Slash Command: `/burn`
+3. Set Request URL to your server endpoint (e.g., `https://burn.example.com/slack`)
+4. Copy the Signing Secret to `SLACK_SIGNING_SECRET`
+5. Install the app to your workspace
+
+### Usage in Slack
+
+```
+/burn analyze                              # Cluster cost summary
+/burn ask "which nodes are expensive?"     # AI-powered answers
+```
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/slack` | POST | Slack slash command handler |
 
 ## Sample Output
 
@@ -125,7 +157,7 @@ spec:
           containers:
           - name: burn
             image: your-registry/burn:latest
-            args: ["analyze", "--ai", "--slack"]
+            args: ["analyze", "--ai", "--slack", "--prometheus", "http://prometheus:9090"]
             envFrom:
             - secretRef:
                 name: burn-secrets

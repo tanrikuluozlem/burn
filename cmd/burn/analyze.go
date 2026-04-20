@@ -20,6 +20,7 @@ import (
 var (
 	namespace     string
 	kubeconfig    string
+	kubecontext   string
 	prometheusURL string
 	output        string
 	withAI        bool
@@ -38,6 +39,7 @@ func init() {
 	f := analyzeCmd.Flags()
 	f.StringVarP(&namespace, "namespace", "n", "", "target namespace (default: all)")
 	f.StringVar(&kubeconfig, "kubeconfig", "", "path to kubeconfig file")
+	f.StringVar(&kubecontext, "context", "", "kubeconfig context to use")
 	f.StringVar(&prometheusURL, "prometheus", "", "Prometheus server URL for usage metrics")
 	f.StringVarP(&output, "output", "o", "table", "output format (table|json)")
 	f.BoolVar(&withAI, "ai", false, "get AI-powered recommendations")
@@ -58,7 +60,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	coll, err := collector.New(kubeconfig, prometheusURL)
+	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL)
 	if err != nil {
 		return err
 	}
@@ -133,6 +135,13 @@ func outputJSON(report *analyzer.CostReport) error {
 func outputTable(report *analyzer.CostReport) {
 	fmt.Printf("\nCluster Cost Analysis - %s\n", report.GeneratedAt.Format(time.RFC3339))
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// Show metrics source
+	if report.MetricsSource == "prometheus" {
+		fmt.Println("Metrics: Prometheus (actual usage)")
+	} else {
+		fmt.Println("Metrics: Pod requests (Prometheus not configured)")
+	}
 
 	fmt.Printf("\nNodes: %d | Pods: %d", report.TotalNodes, report.TotalPods)
 	if report.SkippedNodes > 0 {

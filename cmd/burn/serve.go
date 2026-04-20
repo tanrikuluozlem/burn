@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	servePort       int
-	serveKubeconfig string
-	servePrometheus string
+	servePort        int
+	serveKubeconfig  string
+	serveKubecontext string
+	servePrometheus  string
 )
 
 var serveCmd = &cobra.Command{
@@ -42,6 +43,7 @@ func init() {
 	f := serveCmd.Flags()
 	f.IntVarP(&servePort, "port", "p", 8080, "port to listen on")
 	f.StringVar(&serveKubeconfig, "kubeconfig", "", "path to kubeconfig file")
+	f.StringVar(&serveKubecontext, "context", "", "kubeconfig context to use")
 	f.StringVar(&servePrometheus, "prometheus", "", "Prometheus server URL")
 
 	rootCmd.AddCommand(serveCmd)
@@ -61,6 +63,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	srv, err := server.New(server.Config{
 		Port:          servePort,
 		Kubeconfig:    serveKubeconfig,
+		Kubecontext:   serveKubecontext,
 		PrometheusURL: servePrometheus,
 		APIKey:        apiKey,
 		SigningSecret: signingSecret,

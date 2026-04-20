@@ -48,9 +48,27 @@ func TestStaticProviderUnknownRegion(t *testing.T) {
 
 func TestStaticProviderUnknownInstance(t *testing.T) {
 	p := NewStaticProvider()
+	ctx := context.Background()
 
-	_, err := p.GetHourlyPrice(context.Background(), "x99.mega", "us-east-1", false)
-	if err == nil {
-		t.Error("expected error for unknown instance type")
+	// Unknown instance types should get estimated prices based on size suffix
+	tests := []struct {
+		instanceType string
+		wantPrice    float64
+	}{
+		{"x99.large", 0.10},    // matches "large" suffix
+		{"x99.xlarge", 0.20},   // matches "xlarge" suffix
+		{"x99.2xlarge", 0.40},  // matches "2xlarge" suffix
+		{"x99.medium", 0.04},   // matches "medium" suffix
+		{"unknown", 0.10},      // no match, uses default
+	}
+
+	for _, tt := range tests {
+		price, err := p.GetHourlyPrice(ctx, tt.instanceType, "us-east-1", false)
+		if err != nil {
+			t.Errorf("GetHourlyPrice(%s) error = %v, want nil", tt.instanceType, err)
+		}
+		if price != tt.wantPrice {
+			t.Errorf("GetHourlyPrice(%s) = %v, want %v", tt.instanceType, price, tt.wantPrice)
+		}
 	}
 }

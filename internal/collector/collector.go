@@ -15,17 +15,23 @@ import (
 type Collector struct {
 	client     kubernetes.Interface
 	prometheus *PrometheusClient
+	namespace  string
 }
 
-func New(kubeconfig, prometheusURL string) (*Collector, error) {
+func New(kubeconfig, kubecontext, namespace, prometheusURL string) (*Collector, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
 		loadingRules.ExplicitPath = kubeconfig
 	}
 
+	overrides := &clientcmd.ConfigOverrides{}
+	if kubecontext != "" {
+		overrides.CurrentContext = kubecontext
+	}
+
 	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		loadingRules,
-		&clientcmd.ConfigOverrides{},
+		overrides,
 	).ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
@@ -36,7 +42,10 @@ func New(kubeconfig, prometheusURL string) (*Collector, error) {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
-	c := &Collector{client: client}
+	c := &Collector{
+		client:    client,
+		namespace: namespace,
+	}
 
 	if prometheusURL != "" {
 		c.prometheus = NewPrometheusClient(prometheusURL)
@@ -51,7 +60,7 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		return nil, err
 	}
 
-	pods, err := c.client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	pods, err := c.client.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +114,7 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 		log.Printf("warning: failed to get pod memory metrics: %v", err)
 	}
 
-	// remap by IP for matching (prometheus uses 10.0.1.5:9100, k8s uses ip-10-0-1-5.ec2.internal)
+	// remap by IP for matching (prometheus uses 10.0.1.5:9100)
 	cpuByIP := make(map[string]float64)
 	memByIP := make(map[string]int64)
 	for k, v := range nodeCPU {
@@ -116,7 +125,12 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 	}
 
 	for i := range nodes {
-		ip := extractIPFromNodeName(nodes[i].Name)
+		// Use InternalIP from Kubernetes node status (works for all clouds)
+		ip := nodes[i].InternalIP
+		if ip == "" {
+			// Fallback for legacy AWS node names (ip-10-0-1-5.ec2.internal)
+			ip = extractIPFromNodeName(nodes[i].Name)
+		}
 		if cpu, ok := cpuByIP[ip]; ok {
 			nodes[i].CPUUsage = cpu
 		}
@@ -144,17 +158,27 @@ func parseNode(node corev1.Node) NodeInfo {
 
 	return NodeInfo{
 		Name:           node.Name,
+		InternalIP:     getNodeInternalIP(node),
 		InstanceType:   labels["node.kubernetes.io/instance-type"],
 		Region:         labels["topology.kubernetes.io/region"],
 		Zone:           labels["topology.kubernetes.io/zone"],
 		CloudProvider:  cloud,
-		CPUCores:       node.Status.Capacity.Cpu().MilliValue() / 1000,
+		CPUCores:       node.Status.Capacity.Cpu().MilliValue(),
 		MemoryBytes:    node.Status.Capacity.Memory().Value(),
-		CPUAllocatable: node.Status.Allocatable.Cpu().MilliValue() / 1000,
+		CPUAllocatable: node.Status.Allocatable.Cpu().MilliValue(),
 		MemAllocatable: node.Status.Allocatable.Memory().Value(),
 		IsSpot:         isSpotInstance(labels),
 		Labels:         labels,
 	}
+}
+
+func getNodeInternalIP(node corev1.Node) string {
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP {
+			return addr.Address
+		}
+	}
+	return ""
 }
 
 func detectCloudProvider(labels map[string]string) CloudProvider {

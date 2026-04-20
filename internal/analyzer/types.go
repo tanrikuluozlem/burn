@@ -3,14 +3,15 @@ package analyzer
 import "time"
 
 type CostReport struct {
-	GeneratedAt   time.Time
-	TotalNodes    int
-	TotalPods     int
-	SkippedNodes  int
-	HourlyCost    float64
-	MonthlyCost   float64
-	Nodes         []NodeCost
-	WasteAnalysis WasteAnalysis
+	GeneratedAt      time.Time
+	TotalNodes       int
+	TotalPods        int
+	SkippedNodes     int
+	HourlyCost       float64
+	MonthlyCost      float64
+	Nodes            []NodeCost
+	WasteAnalysis    WasteAnalysis
+	MetricsSource    string // "prometheus" or "requests"
 }
 
 type NodeCost struct {

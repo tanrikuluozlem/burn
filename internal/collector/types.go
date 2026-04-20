@@ -11,6 +11,7 @@ const (
 
 type NodeInfo struct {
 	Name           string
+	InternalIP     string
 	InstanceType   string
 	Region         string
 	Zone           string

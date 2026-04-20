@@ -17,6 +17,8 @@ import (
 type Config struct {
 	Port          int
 	Kubeconfig    string
+	Kubecontext   string
+	Namespace     string
 	PrometheusURL string
 	APIKey        string
 	SigningSecret string
@@ -30,7 +32,7 @@ type Server struct {
 }
 
 func New(cfg Config) (*Server, error) {
-	coll, err := collector.New(cfg.Kubeconfig, cfg.PrometheusURL)
+	coll, err := collector.New(cfg.Kubeconfig, cfg.Kubecontext, cfg.Namespace, cfg.PrometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create collector: %w", err)
 	}
@@ -191,5 +193,10 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 	}
 
 	body, _ := json.Marshal(payload)
-	http.Post(responseURL, "application/json", strings.NewReader(string(body)))
+	resp, err := http.Post(responseURL, "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		fmt.Printf("failed to send slack response: %v\n", err)
+		return
+	}
+	resp.Body.Close()
 }

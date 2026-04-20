@@ -16,6 +16,7 @@ Running Kubernetes in production gets expensive fast. Most teams overprovision b
 - Natural language questions (`burn ask`)
 - Slack slash commands (`burn serve`)
 - Multi-cloud pricing: AWS, Azure (spot aware)
+- Multi-cluster support (`--context`)
 - Slack integration (`--slack`)
 - Prometheus integration for real usage metrics (`--prometheus`)
 
@@ -63,10 +64,17 @@ burn analyze -o json
 # With Prometheus metrics
 burn analyze --prometheus http://prometheus:9090
 
+# Analyze different cluster (multi-cluster)
+burn analyze --context my-prod-cluster
+burn analyze --context my-staging-cluster --ai
+
 # Ask questions
 burn ask "why is this node so expensive?"
 burn ask "how can I reduce costs?"
 burn ask "what's the risk of using spot instances?"
+
+# Ask with specific cluster context
+burn ask --context my-prod-cluster "which nodes should I convert to spot?"
 ```
 
 ## Slack Slash Commands
@@ -75,6 +83,9 @@ Run `burn serve` to enable Slack slash commands:
 
 ```bash
 burn serve --port 8080
+
+# With specific cluster context
+burn serve --port 8080 --context my-prod-cluster
 ```
 
 ### Setup
@@ -127,8 +138,10 @@ Waste Analysis:
 K8s API → Collector → Analyzer → Advisor (Claude) → Output
               ↑            ↑
          Prometheus    Pricing API
-         (optional)    (AWS/Azure)
+         (recommended)  (AWS/Azure)
 ```
+
+When Prometheus is configured, burn uses actual CPU/memory usage for analysis. Without it, pod resource requests are used as a fallback.
 
 ## Deployment
 

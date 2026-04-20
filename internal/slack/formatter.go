@@ -9,12 +9,24 @@ import (
 )
 
 func FormatCostReport(report *analyzer.CostReport) *Message {
+	metricsNote := "_Based on pod requests_"
+	if report.MetricsSource == "prometheus" {
+		metricsNote = "_Based on Prometheus metrics (actual usage)_"
+	}
+
 	blocks := []Block{
 		{
 			Type: "header",
 			Text: &TextObject{
 				Type: "plain_text",
 				Text: "Daily Kubernetes Cost Report",
+			},
+		},
+		{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: metricsNote,
 			},
 		},
 		{
@@ -125,9 +137,15 @@ func FormatAIReport(report *advisor.Report) *Message {
 }
 
 func FormatQuickCost(report *analyzer.CostReport) *Message {
-	text := fmt.Sprintf("*Cluster Cost Summary*\n"+
+	metricsNote := "(based on requests)"
+	if report.MetricsSource == "prometheus" {
+		metricsNote = "(based on actual usage)"
+	}
+
+	text := fmt.Sprintf("*Cluster Cost Summary* %s\n"+
 		"Nodes: %d | Pods: %d\n"+
 		"Hourly: $%.4f | Monthly: $%.2f",
+		metricsNote,
 		report.TotalNodes, report.TotalPods,
 		report.HourlyCost, report.MonthlyCost)
 

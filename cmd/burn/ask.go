@@ -39,6 +39,7 @@ func init() {
 	f := askCmd.Flags()
 	f.StringVarP(&namespace, "namespace", "n", "", "target namespace (default: all)")
 	f.StringVar(&kubeconfig, "kubeconfig", "", "path to kubeconfig file")
+	f.StringVar(&kubecontext, "context", "", "kubeconfig context to use")
 	f.StringVar(&prometheusURL, "prometheus", "", "Prometheus server URL")
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	f.BoolVar(&askSlack, "slack", false, "send answer to Slack")
@@ -60,7 +61,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Collecting cluster data...")
 
-	coll, err := collector.New(kubeconfig, prometheusURL)
+	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL)
 	if err != nil {
 		return err
 	}

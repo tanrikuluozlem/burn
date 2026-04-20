@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -78,13 +79,22 @@ func (p *AzureProvider) fetchPrice(ctx context.Context, vmSize, region string, i
 		return 0, err
 	}
 
+	// Find the correct price: Linux, not Low Priority, not Spot (unless we want Spot)
 	for _, item := range result.Items {
-		if item.ProductName != "" && !isWindowsProduct(item.ProductName) {
-			return item.RetailPrice, nil
+		if item.ProductName == "" || isWindowsProduct(item.ProductName) {
+			continue
 		}
-	}
-	if len(result.Items) > 0 {
-		return result.Items[0].RetailPrice, nil
+		// For on-demand, we want the base SKU (no "Low Priority" or "Spot" in skuName)
+		// For spot, we want "Spot" in skuName
+		if isSpot {
+			if containsSpot(item.SkuName) {
+				return item.RetailPrice, nil
+			}
+		} else {
+			if !containsSpot(item.SkuName) && !containsLowPriority(item.SkuName) {
+				return item.RetailPrice, nil
+			}
+		}
 	}
 	return 0, fmt.Errorf("no pricing for %s in %s", vmSize, region)
 }
@@ -102,5 +112,13 @@ type azurePriceItem struct {
 }
 
 func isWindowsProduct(name string) bool {
-	return len(name) > 7 && name[len(name)-7:] == "Windows"
+	return strings.HasSuffix(name, "Windows")
+}
+
+func containsSpot(skuName string) bool {
+	return strings.Contains(skuName, "Spot")
+}
+
+func containsLowPriority(skuName string) bool {
+	return strings.Contains(skuName, "Low Priority")
 }

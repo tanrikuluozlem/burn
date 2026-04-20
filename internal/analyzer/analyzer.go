@@ -23,18 +23,25 @@ func New(p pricing.Provider) *Analyzer {
 }
 
 func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*CostReport, error) {
+	// Check if Prometheus metrics are available
+	hasPrometheus := hasPrometheusMetrics(info.Nodes)
+
 	report := &CostReport{
-		GeneratedAt: time.Now().UTC(),
-		TotalNodes:  info.TotalNodes,
-		TotalPods:   info.TotalPods,
-		Nodes:       make([]NodeCost, 0, len(info.Nodes)),
+		GeneratedAt:   time.Now().UTC(),
+		TotalNodes:    info.TotalNodes,
+		TotalPods:     info.TotalPods,
+		Nodes:         make([]NodeCost, 0, len(info.Nodes)),
+		MetricsSource: "requests",
+	}
+	if hasPrometheus {
+		report.MetricsSource = "prometheus"
 	}
 
 	var totalHourly float64
 	var skipped int
 
 	for _, node := range info.Nodes {
-		nc, err := a.calculateNodeCost(ctx, node)
+		nc, err := a.calculateNodeCost(ctx, node, hasPrometheus)
 		if err != nil {
 			slog.Warn("failed to calculate node cost",
 				"node", node.Name,
@@ -70,14 +77,38 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 	return report, nil
 }
 
-func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInfo) (NodeCost, error) {
-	price, err := a.pricing.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
+func hasPrometheusMetrics(nodes []collector.NodeInfo) bool {
+	for _, node := range nodes {
+		if node.CPUUsage > 0 || node.MemoryUsage > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInfo, usePrometheus bool) (NodeCost, error) {
+	price, err := a.pricing.GetHourlyPriceForNode(ctx, node)
 	if err != nil {
 		return NodeCost{}, err
 	}
 
-	cpuPct := resourcePercentage(sumPodCPU(node.Pods), node.CPUAllocatable*1000)
-	memPct := resourcePercentage(sumPodMemory(node.Pods), node.MemAllocatable)
+	var cpuPct, memPct float64
+
+	if usePrometheus && node.CPUUsage > 0 {
+		// Prometheus: CPUUsage is in cores, CPUAllocatable is in millicores
+		cpuPct = node.CPUUsage / (float64(node.CPUAllocatable) / 1000.0)
+	} else {
+		// Fallback: use pod requests
+		cpuPct = resourcePercentage(sumPodCPU(node.Pods), node.CPUAllocatable)
+	}
+
+	if usePrometheus && node.MemoryUsage > 0 {
+		// Prometheus: both are in bytes
+		memPct = float64(node.MemoryUsage) / float64(node.MemAllocatable)
+	} else {
+		// Fallback: use pod requests
+		memPct = resourcePercentage(sumPodMemory(node.Pods), node.MemAllocatable)
+	}
 
 	return NodeCost{
 		Name:         node.Name,

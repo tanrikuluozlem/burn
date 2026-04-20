@@ -2,7 +2,6 @@ package pricing
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/tanrikuluozlem/burn/internal/collector"
@@ -48,7 +47,7 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 
 	default:
-		return 0, fmt.Errorf("unknown cloud provider for node %s", node.Name)
+		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
 	}
 }
 

@@ -29,10 +29,24 @@ type cachedPrice struct {
 }
 
 func NewAWSProvider(ctx context.Context) (*AWSProvider, error) {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
+	// Use a short timeout for credential loading to fail fast when AWS isn't configured
+	loadCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cfg, err := config.LoadDefaultConfig(loadCtx, config.WithRegion("us-east-1"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("aws config: %w", err)
 	}
+
+	// Quick credential check - fail fast if no credentials available
+	creds, err := cfg.Credentials.Retrieve(loadCtx)
+	if err != nil {
+		return nil, fmt.Errorf("aws credentials: %w", err)
+	}
+	if creds.AccessKeyID == "" {
+		return nil, fmt.Errorf("aws credentials not configured")
+	}
+
 	return &AWSProvider{
 		pricingClient: pricing.NewFromConfig(cfg),
 		ec2Clients:    make(map[string]*ec2.Client),

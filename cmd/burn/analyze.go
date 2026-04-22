@@ -136,8 +136,9 @@ func outputTable(report *analyzer.CostReport) {
 	fmt.Printf("\nCluster Cost Analysis - %s\n", report.GeneratedAt.Format(time.RFC3339))
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	// Show metrics source
-	if report.MetricsSource == "prometheus" {
+	hasPrometheus := report.MetricsSource == "prometheus"
+
+	if hasPrometheus {
 		fmt.Println("Metrics: Actual usage (Prometheus)")
 	} else {
 		fmt.Println("Metrics: Resource requests (scheduling view)")
@@ -147,32 +148,84 @@ func outputTable(report *analyzer.CostReport) {
 	if report.SkippedNodes > 0 {
 		fmt.Printf(" | Skipped: %d", report.SkippedNodes)
 	}
-	fmt.Printf("\nHourly: $%.4f | Monthly: $%.2f\n\n", report.HourlyCost, report.MonthlyCost)
+	fmt.Printf("\nMonthly Cost: $%.2f | Idle Cost: $%.2f (%.0f%%)\n\n",
+		report.MonthlyCost, report.TotalIdleCost, (report.TotalIdleCost/report.MonthlyCost)*100)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NODE\tTYPE\tSPOT\tPODS\tCPU%\tMEM%\tHOURLY\tMONTHLY")
-	fmt.Fprintln(w, "────\t────\t────\t────\t────\t────\t──────\t───────")
+
+	// Node table with idle cost
+	fmt.Fprintln(w, "NODE\tTYPE\tSPOT\tPODS\tCOST/MO\tIDLE COST\tIDLE%")
+	fmt.Fprintln(w, "────\t────\t────\t────\t───────\t─────────\t─────")
 
 	for _, n := range report.Nodes {
 		spot := "no"
 		if n.IsSpot {
 			spot = "yes"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%.0f%%\t%.0f%%\t$%.4f\t$%.2f\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t$%.2f\t$%.2f\t%.0f%%\n",
 			truncate(n.Name, 20), n.InstanceType, spot, n.PodCount,
-			n.CPURequested*100, n.MemRequested*100, n.HourlyPrice, n.MonthlyPrice)
+			n.MonthlyPrice, n.IdleCostMonthly, n.IdlePercent*100)
 	}
 	w.Flush()
 
-	if len(report.WasteAnalysis.UnderutilizedNodes) > 0 {
-		fmt.Printf("\nWaste Analysis:\n")
-		fmt.Printf("  Underutilized: %d nodes\n", len(report.WasteAnalysis.UnderutilizedNodes))
-		fmt.Printf("  Potential savings: $%.2f/mo\n\n", report.WasteAnalysis.PotentialSavings)
-
-		for _, u := range report.WasteAnalysis.UnderutilizedNodes {
-			fmt.Printf("  - %s (%.0f%%): %s\n", u.Name, u.Utilization*100, u.Recommendation)
-		}
+	// Pod efficiency section (only with Prometheus)
+	if hasPrometheus && len(report.InefficientPods) > 0 {
+		outputPodEfficiency(report.InefficientPods)
 	}
+
+	// Waste analysis
+	if len(report.WasteAnalysis.UnderutilizedNodes) > 0 {
+		fmt.Printf("\nHigh Idle Nodes (>70%%):\n")
+		for _, u := range report.WasteAnalysis.UnderutilizedNodes {
+			fmt.Printf("  • %s (%.0f%% idle, $%.2f/mo wasted): %s\n",
+				truncate(u.Name, 25), u.IdlePercent*100, u.IdleCost, u.Recommendation)
+		}
+		fmt.Printf("\nPotential savings: $%.2f/mo\n", report.WasteAnalysis.PotentialSavings)
+	}
+}
+
+func outputPodEfficiency(pods []analyzer.PodEfficiency) {
+	fmt.Println("\nPod Efficiency (usage/request)")
+	fmt.Println("──────────────────────────────────────────")
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAMESPACE\tPOD\tCPU REQ\tCPU EFF.\tMEM REQ\tMEM EFF.\tCOST/MO")
+	fmt.Fprintln(w, "─────────\t───\t───────\t────────\t───────\t────────\t───────")
+
+	for _, p := range pods {
+		cpuReqStr := formatMillicores(p.CPURequest)
+		memReqStr := formatBytes(p.MemRequest)
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%.0f%%\t%s\t%.0f%%\t$%.2f\n",
+			truncate(p.Namespace, 12),
+			truncate(p.Name, 20),
+			cpuReqStr,
+			p.CPUEfficiency*100,
+			memReqStr,
+			p.MemEfficiency*100,
+			p.MonthlyCost)
+	}
+	w.Flush()
+
+	fmt.Println("\nTip: Low efficiency (<50%) indicates over-provisioned requests. Consider reducing.")
+}
+
+func formatMillicores(m int64) string {
+	if m >= 1000 {
+		return fmt.Sprintf("%.1f", float64(m)/1000)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+func formatBytes(b int64) string {
+	const (
+		gi = 1024 * 1024 * 1024
+		mi = 1024 * 1024
+	)
+	if b >= gi {
+		return fmt.Sprintf("%.1fGi", float64(b)/float64(gi))
+	}
+	return fmt.Sprintf("%dMi", b/mi)
 }
 
 func truncate(s string, max int) string {

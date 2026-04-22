@@ -143,6 +143,14 @@ K8s API → Collector → Analyzer → Advisor (Claude) → Output
 
 When Prometheus is configured, burn uses actual CPU/memory usage for analysis. Without it, pod resource requests are used as a fallback.
 
+## Pricing
+
+Costs are calculated using list prices from cloud provider APIs. We fetch prices from AWS Pricing API and Azure Retail Prices API weekly and embed them in the binary. This means you get accurate costs out of the box without any cloud credentials.
+
+The pricing data covers 600+ AWS instance types and 300+ Azure VM sizes across major regions. Updates happen every Monday via a GitHub Action that creates a PR when prices change.
+
+If you need real-time prices or have negotiated discounts, the cloud APIs are called at runtime when credentials are available.
+
 ## Deployment
 
 Build and push to your registry:

@@ -1,0 +1,150 @@
+# GCP Compute Engine Instance Pricing (Linux, On-Demand)
+# Source: https://cloud.google.com/compute/vm-instance-pricing
+# Last updated: 2026-04-20
+
+us-central1:
+  e2-micro: 0.0084
+  e2-small: 0.0168
+  e2-medium: 0.0336
+  e2-standard-2: 0.0671
+  e2-standard-4: 0.1342
+  e2-standard-8: 0.2684
+  e2-standard-16: 0.5765
+  e2-highmem-2: 0.0903
+  e2-highmem-4: 0.1806
+  e2-highmem-8: 0.3612
+  e2-highcpu-2: 0.0496
+  e2-highcpu-4: 0.0992
+  e2-highcpu-8: 0.1984
+  n1-standard-1: 0.0475
+  n1-standard-2: 0.095
+  n1-standard-4: 0.19
+  n1-standard-8: 0.38
+  n1-standard-16: 0.76
+  n1-highmem-2: 0.1184
+  n1-highmem-4: 0.2368
+  n1-highmem-8: 0.4736
+  n1-highcpu-2: 0.0709
+  n1-highcpu-4: 0.1418
+  n1-highcpu-8: 0.2836
+  n2-standard-2: 0.0971
+  n2-standard-4: 0.1942
+  n2-standard-8: 0.3883
+  n2-highmem-2: 0.131
+  n2-highmem-4: 0.262
+  n2-highcpu-2: 0.0718
+  n2-highcpu-4: 0.1436
+  n2d-standard-2: 0.0845
+  n2d-standard-4: 0.169
+  n2d-standard-8: 0.338
+  c2-standard-4: 0.2088
+  c2-standard-8: 0.4176
+
+us-east1:
+  e2-micro: 0.0084
+  e2-small: 0.0168
+  e2-medium: 0.0336
+  e2-standard-2: 0.0671
+  e2-standard-4: 0.1342
+  e2-standard-8: 0.2684
+  n1-standard-1: 0.0475
+  n1-standard-2: 0.095
+  n1-standard-4: 0.19
+  n2-standard-2: 0.0971
+  n2-standard-4: 0.1942
+  n2d-standard-2: 0.0845
+  n2d-standard-4: 0.169
+
+us-west1:
+  e2-micro: 0.0084
+  e2-small: 0.0168
+  e2-medium: 0.0336
+  e2-standard-2: 0.0671
+  e2-standard-4: 0.1342
+  n1-standard-1: 0.0475
+  n1-standard-2: 0.095
+  n1-standard-4: 0.19
+  n2-standard-2: 0.0971
+  n2-standard-4: 0.1942
+
+europe-west1:
+  e2-micro: 0.0092
+  e2-small: 0.0184
+  e2-medium: 0.0369
+  e2-standard-2: 0.0738
+  e2-standard-4: 0.1476
+  e2-standard-8: 0.2952
+  n1-standard-1: 0.0523
+  n1-standard-2: 0.1045
+  n1-standard-4: 0.209
+  n1-standard-8: 0.418
+  n2-standard-2: 0.1068
+  n2-standard-4: 0.2136
+  n2d-standard-2: 0.093
+  n2d-standard-4: 0.186
+
+europe-west2:
+  e2-micro: 0.0097
+  e2-small: 0.0194
+  e2-medium: 0.0389
+  e2-standard-2: 0.0778
+  e2-standard-4: 0.1555
+  n1-standard-1: 0.0551
+  n1-standard-2: 0.1101
+  n1-standard-4: 0.2202
+  n2-standard-2: 0.1125
+  n2-standard-4: 0.2251
+
+europe-west3:
+  e2-micro: 0.0097
+  e2-small: 0.0194
+  e2-medium: 0.0389
+  e2-standard-2: 0.0778
+  e2-standard-4: 0.1555
+  n1-standard-1: 0.0551
+  n1-standard-2: 0.1101
+  n1-standard-4: 0.2202
+
+asia-east1:
+  e2-micro: 0.0094
+  e2-small: 0.0189
+  e2-medium: 0.0378
+  e2-standard-2: 0.0755
+  e2-standard-4: 0.1511
+  n1-standard-1: 0.0535
+  n1-standard-2: 0.107
+  n1-standard-4: 0.214
+  n2-standard-2: 0.1093
+  n2-standard-4: 0.2185
+
+asia-northeast1:
+  e2-micro: 0.0101
+  e2-small: 0.0202
+  e2-medium: 0.0403
+  e2-standard-2: 0.0806
+  e2-standard-4: 0.1612
+  n1-standard-1: 0.057
+  n1-standard-2: 0.114
+  n1-standard-4: 0.228
+  n2-standard-2: 0.1165
+  n2-standard-4: 0.233
+
+asia-southeast1:
+  e2-micro: 0.0094
+  e2-small: 0.0189
+  e2-medium: 0.0378
+  e2-standard-2: 0.0755
+  e2-standard-4: 0.1511
+  n1-standard-1: 0.0535
+  n1-standard-2: 0.107
+  n1-standard-4: 0.214
+
+australia-southeast1:
+  e2-micro: 0.0108
+  e2-small: 0.0216
+  e2-medium: 0.0432
+  e2-standard-2: 0.0864
+  e2-standard-4: 0.1727
+  n1-standard-1: 0.0612
+  n1-standard-2: 0.1224
+  n1-standard-4: 0.2448

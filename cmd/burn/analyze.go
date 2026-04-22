@@ -138,9 +138,9 @@ func outputTable(report *analyzer.CostReport) {
 
 	// Show metrics source
 	if report.MetricsSource == "prometheus" {
-		fmt.Println("Metrics: Prometheus (actual usage)")
+		fmt.Println("Metrics: Actual usage (Prometheus)")
 	} else {
-		fmt.Println("Metrics: Pod requests (Prometheus not configured)")
+		fmt.Println("Metrics: Resource requests (scheduling view)")
 	}
 
 	fmt.Printf("\nNodes: %d | Pods: %d", report.TotalNodes, report.TotalPods)

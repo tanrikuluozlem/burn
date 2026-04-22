@@ -9,9 +9,9 @@ import (
 )
 
 func FormatCostReport(report *analyzer.CostReport) *Message {
-	metricsNote := "_Based on pod requests_"
+	metricsNote := "_Based on resource requests (scheduling view)_"
 	if report.MetricsSource == "prometheus" {
-		metricsNote = "_Based on Prometheus metrics (actual usage)_"
+		metricsNote = "_Based on actual usage (Prometheus)_"
 	}
 
 	blocks := []Block{

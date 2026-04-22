@@ -1,0 +1,60 @@
+name: Update Pricing Data
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch:  # Manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  update-pricing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Update AWS Pricing
+        run: go run scripts/update-pricing.go aws
+
+      - name: Update Azure Pricing
+        run: go run scripts/update-pricing.go azure
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet internal/pricing/data/; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update cloud pricing data"
+          title: "chore: update cloud pricing data"
+          body: |
+            Automated weekly update of cloud pricing data from official APIs.
+
+            - AWS: Pricing API
+            - Azure: Retail Prices API
+            - GCP: Manual (no public API)
+          branch: chore/update-pricing
+          delete-branch: true

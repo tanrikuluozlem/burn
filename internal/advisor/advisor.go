@@ -36,8 +36,9 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Re
 	}
 
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     a.model,
-		MaxTokens: 2048,
+		Model:       a.model,
+		MaxTokens:   2048,
+		Temperature: anthropic.Float(0), // Deterministic output
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -84,7 +85,11 @@ Focus on:
 - Right-sizing opportunities
 - Consolidation possibilities
 
-IMPORTANT: Recommendations must be non-overlapping. Do not suggest both "remove a node" and "convert that same node to spot" - pick the better option. Each resource should appear in only ONE recommendation. Estimated savings must be realistic and not double-count the same resource.
+CRITICAL RULES:
+1. Use the PRE-CALCULATED SAVINGS values provided in the prompt. Do NOT calculate your own savings numbers.
+2. The estimated_savings field MUST match the pre-calculated values exactly.
+3. Only recommend actions that have pre-calculated savings provided.
+4. Recommendations must be non-overlapping - each resource in only ONE recommendation.
 
 Be specific. Include kubectl or eksctl commands when relevant.`
 
@@ -130,7 +135,27 @@ var recommendationSchema = anthropic.ToolInputSchemaParam{
 
 func buildPrompt(report *analyzer.CostReport) string {
 	data, _ := json.MarshalIndent(report, "", "  ")
-	return fmt.Sprintf("Analyze this Kubernetes cluster cost report and provide recommendations:\n\n%s", string(data))
+
+	// Calculate deterministic savings
+	savings := CalculateSavings(report)
+
+	savingsInfo := "\n\nPRE-CALCULATED SAVINGS (use these exact values):\n"
+
+	if savings.SpotConversion != nil && savings.SpotConversion.Applicable {
+		savingsInfo += fmt.Sprintf("- Spot conversion: $%.2f/month savings\n", savings.SpotConversion.MonthlySavings)
+	}
+	if savings.NodeConsolidation != nil && savings.NodeConsolidation.Applicable {
+		savingsInfo += fmt.Sprintf("- Node consolidation: $%.2f/month savings (node: %s)\n",
+			savings.NodeConsolidation.MonthlySavings,
+			savings.NodeConsolidation.AffectedNodes[0])
+	}
+	if savings.RightSizing != nil && savings.RightSizing.Applicable {
+		savingsInfo += fmt.Sprintf("- Right-sizing: $%.2f/month savings\n", savings.RightSizing.MonthlySavings)
+	}
+
+	savingsInfo += fmt.Sprintf("\nTotal potential savings: $%.2f/month\n", savings.TotalSavings())
+
+	return fmt.Sprintf("Analyze this Kubernetes cluster cost report and provide recommendations:\n\n%s%s", string(data), savingsInfo)
 }
 
 type toolInput struct {

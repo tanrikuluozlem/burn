@@ -14,6 +14,11 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 		metricsNote = "_Based on actual usage (Prometheus)_"
 	}
 
+	idlePercent := 0.0
+	if report.MonthlyCost > 0 {
+		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
+	}
+
 	blocks := []Block{
 		{
 			Type: "header",
@@ -34,8 +39,8 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 			Fields: []TextObject{
 				{Type: "mrkdwn", Text: fmt.Sprintf("*Nodes:* %d", report.TotalNodes)},
 				{Type: "mrkdwn", Text: fmt.Sprintf("*Pods:* %d", report.TotalPods)},
-				{Type: "mrkdwn", Text: fmt.Sprintf("*Hourly:* $%.4f", report.HourlyCost)},
 				{Type: "mrkdwn", Text: fmt.Sprintf("*Monthly:* $%.2f", report.MonthlyCost)},
+				{Type: "mrkdwn", Text: fmt.Sprintf("*Idle Cost:* $%.2f (%.0f%%)", report.TotalIdleCost, idlePercent)},
 			},
 		},
 	}
@@ -47,8 +52,8 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 			if n.IsSpot {
 				spot = " (spot)"
 			}
-			nodeLines = append(nodeLines, fmt.Sprintf("• `%s` %s%s - %.0f%% util - $%.2f/mo",
-				truncate(n.Name, 25), n.InstanceType, spot, n.Utilization*100, n.MonthlyPrice))
+			nodeLines = append(nodeLines, fmt.Sprintf("• `%s` %s%s - $%.2f/mo - $%.2f idle (%.0f%%)",
+				truncate(n.Name, 25), n.InstanceType, spot, n.MonthlyPrice, n.IdleCostMonthly, n.IdlePercent*100))
 		}
 
 		blocks = append(blocks, Block{
@@ -56,6 +61,31 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 			Text: &TextObject{
 				Type: "mrkdwn",
 				Text: "*Nodes:*\n" + strings.Join(nodeLines, "\n"),
+			},
+		})
+	}
+
+	// Show pod efficiency when Prometheus is available
+	if report.MetricsSource == "prometheus" && len(report.InefficientPods) > 0 {
+		blocks = append(blocks, Block{Type: "divider"})
+
+		effLines := []string{"*Top Inefficient Pods (by CPU):*", ""}
+		for _, p := range report.InefficientPods {
+			status := ":white_check_mark:"
+			if p.CPUEfficiency < 0.5 {
+				status = ":warning:"
+			}
+			effLines = append(effLines, fmt.Sprintf("• `%s/%s` CPU: %.0f%% eff %s",
+				truncate(p.Namespace, 10), truncate(p.Name, 20), p.CPUEfficiency*100, status))
+		}
+
+		effLines = append(effLines, "", "_Pods using <50% of requested CPU. Consider reducing requests._")
+
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: strings.Join(effLines, "\n"),
 			},
 		})
 	}
@@ -70,15 +100,15 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 			"",
 		}
 		for _, u := range report.WasteAnalysis.UnderutilizedNodes {
-			wasteLines = append(wasteLines, fmt.Sprintf("• `%s` (%.0f%% util): %s",
-				truncate(u.Name, 25), u.Utilization*100, u.Recommendation))
+			wasteLines = append(wasteLines, fmt.Sprintf("• `%s` (%.0f%% idle): %s",
+				truncate(u.Name, 25), u.IdlePercent*100, u.Recommendation))
 		}
 
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: "*Waste Analysis:*\n" + strings.Join(wasteLines, "\n"),
+				Text: "*High Idle Nodes:*\n" + strings.Join(wasteLines, "\n"),
 			},
 		})
 	}
@@ -142,12 +172,17 @@ func FormatQuickCost(report *analyzer.CostReport) *Message {
 		metricsNote = "(based on actual usage)"
 	}
 
+	idlePercent := 0.0
+	if report.MonthlyCost > 0 {
+		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
+	}
+
 	text := fmt.Sprintf("*Cluster Cost Summary* %s\n"+
 		"Nodes: %d | Pods: %d\n"+
-		"Hourly: $%.4f | Monthly: $%.2f",
+		"Monthly: $%.2f | Idle: $%.2f (%.0f%%)",
 		metricsNote,
 		report.TotalNodes, report.TotalPods,
-		report.HourlyCost, report.MonthlyCost)
+		report.MonthlyCost, report.TotalIdleCost, idlePercent)
 
 	if report.WasteAnalysis.PotentialSavings > 0 {
 		text += fmt.Sprintf("\n_Potential savings: $%.2f/mo_", report.WasteAnalysis.PotentialSavings)

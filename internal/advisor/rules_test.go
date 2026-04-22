@@ -14,19 +14,19 @@ func TestCalculateSpotSavings(t *testing.T) {
 		wantSavings    float64
 	}{
 		{
-			name: "on-demand nodes with low utilization - should recommend spot",
+			name: "on-demand nodes with high idle - should recommend spot",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, Utilization: 0.40},
-				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, Utilization: 0.50},
+				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60}, // 40% used
+				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.50}, // 50% used
 			},
 			wantApplicable: true,
 			wantSavings:    140, // (100+100) * 0.70
 		},
 		{
-			name: "on-demand nodes with high utilization - should NOT recommend spot",
+			name: "on-demand nodes with low idle - should NOT recommend spot",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, Utilization: 0.85},
-				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, Utilization: 0.90},
+				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.15}, // 85% used
+				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.10}, // 90% used
 			},
 			wantApplicable: false,
 			wantSavings:    140, // calculated but not applicable
@@ -34,8 +34,8 @@ func TestCalculateSpotSavings(t *testing.T) {
 		{
 			name: "all spot nodes - not applicable",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: true, MonthlyPrice: 35, Utilization: 0.40},
-				{Name: "node-2", IsSpot: true, MonthlyPrice: 35, Utilization: 0.50},
+				{Name: "node-1", IsSpot: true, MonthlyPrice: 35, IdlePercent: 0.60},
+				{Name: "node-2", IsSpot: true, MonthlyPrice: 35, IdlePercent: 0.50},
 			},
 			wantApplicable: false,
 			wantSavings:    0,
@@ -43,8 +43,8 @@ func TestCalculateSpotSavings(t *testing.T) {
 		{
 			name: "mixed spot and on-demand",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, Utilization: 0.40},
-				{Name: "node-2", IsSpot: true, MonthlyPrice: 35, Utilization: 0.50},
+				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60}, // 40% used
+				{Name: "node-2", IsSpot: true, MonthlyPrice: 35, IdlePercent: 0.50},
 			},
 			wantApplicable: true,
 			wantSavings:    70, // only on-demand: 100 * 0.70
@@ -74,35 +74,35 @@ func TestCalculateConsolidationSavings(t *testing.T) {
 		wantSavings    float64
 	}{
 		{
-			name: "low utilization cluster - should consolidate",
+			name: "high idle cluster - should consolidate",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", MonthlyPrice: 100, Utilization: 0.60},
-				{Name: "node-2", MonthlyPrice: 70, Utilization: 0.30}, // least utilized
-				{Name: "node-3", MonthlyPrice: 100, Utilization: 0.55},
+				{Name: "node-1", MonthlyPrice: 100, IdlePercent: 0.40}, // 60% used
+				{Name: "node-2", MonthlyPrice: 70, IdlePercent: 0.70},  // 30% used - most idle
+				{Name: "node-3", MonthlyPrice: 100, IdlePercent: 0.45}, // 55% used
 			},
 			wantApplicable: true,
 			wantSavings:    70, // remove node-2
 		},
 		{
-			name: "high utilization cluster - should NOT consolidate",
+			name: "low idle cluster - should NOT consolidate",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", MonthlyPrice: 100, Utilization: 0.75},
-				{Name: "node-2", MonthlyPrice: 100, Utilization: 0.80},
+				{Name: "node-1", MonthlyPrice: 100, IdlePercent: 0.25}, // 75% used
+				{Name: "node-2", MonthlyPrice: 100, IdlePercent: 0.20}, // 80% used
 			},
 			wantApplicable: false,
 		},
 		{
 			name: "single node - cannot consolidate",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", MonthlyPrice: 100, Utilization: 0.20},
+				{Name: "node-1", MonthlyPrice: 100, IdlePercent: 0.80}, // 20% used
 			},
 			wantApplicable: false,
 		},
 		{
-			name: "lowest node above 50% - should NOT consolidate",
+			name: "most idle node below 50% - should NOT consolidate",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", MonthlyPrice: 100, Utilization: 0.55},
-				{Name: "node-2", MonthlyPrice: 100, Utilization: 0.60},
+				{Name: "node-1", MonthlyPrice: 100, IdlePercent: 0.45}, // 55% used
+				{Name: "node-2", MonthlyPrice: 100, IdlePercent: 0.40}, // 60% used
 			},
 			wantApplicable: false,
 		},

@@ -39,14 +39,14 @@ func CalculateSavings(report *analyzer.CostReport) *PotentialSavings {
 func calculateSpotSavings(report *analyzer.CostReport) *SavingsOpportunity {
 	var onDemandCost float64
 	var onDemandNodes []string
-	var avgUtilization float64
+	var avgIdlePercent float64
 	nodeCount := 0
 
 	for _, node := range report.Nodes {
 		if !node.IsSpot {
 			onDemandCost += node.MonthlyPrice
 			onDemandNodes = append(onDemandNodes, node.Name)
-			avgUtilization += node.Utilization
+			avgIdlePercent += node.IdlePercent
 			nodeCount++
 		}
 	}
@@ -59,7 +59,7 @@ func calculateSpotSavings(report *analyzer.CostReport) *SavingsOpportunity {
 		}
 	}
 
-	avgUtilization = avgUtilization / float64(nodeCount)
+	avgIdlePercent = avgIdlePercent / float64(nodeCount)
 
 	// Spot typically saves 60-70%, we use 70% conservatively
 	spotDiscount := 0.70
@@ -68,7 +68,7 @@ func calculateSpotSavings(report *analyzer.CostReport) *SavingsOpportunity {
 	return &SavingsOpportunity{
 		Type:           "spot_conversion",
 		MonthlySavings: monthlySavings,
-		Applicable:     avgUtilization < 0.80, // Only recommend if utilization allows interruption tolerance
+		Applicable:     avgIdlePercent > 0.20, // Only recommend if idle > 20% (utilization < 80%)
 		Reason:         "Convert on-demand instances to spot for 70% savings",
 		AffectedNodes:  onDemandNodes,
 	}
@@ -83,28 +83,28 @@ func calculateConsolidationSavings(report *analyzer.CostReport) *SavingsOpportun
 		}
 	}
 
-	// Find the least utilized node
-	var leastUtilizedNode *analyzer.NodeCost
-	var lowestUtil float64 = 1.0
+	// Find the most idle node (highest IdlePercent)
+	var mostIdleNode *analyzer.NodeCost
+	var highestIdle float64 = 0.0
 
 	for i := range report.Nodes {
 		node := &report.Nodes[i]
-		if node.Utilization < lowestUtil {
-			lowestUtil = node.Utilization
-			leastUtilizedNode = node
+		if node.IdlePercent > highestIdle {
+			highestIdle = node.IdlePercent
+			mostIdleNode = node
 		}
 	}
 
 	// Can consolidate if:
-	// 1. Lowest utilized node is < 50%
-	// 2. Average cluster utilization is < 70%
-	var totalUtil float64
+	// 1. Most idle node has > 50% idle (was: utilization < 50%)
+	// 2. Average cluster idle is > 30% (was: utilization < 70%)
+	var totalIdle float64
 	for _, node := range report.Nodes {
-		totalUtil += node.Utilization
+		totalIdle += node.IdlePercent
 	}
-	avgClusterUtil := totalUtil / float64(len(report.Nodes))
+	avgClusterIdle := totalIdle / float64(len(report.Nodes))
 
-	if lowestUtil >= 0.50 || avgClusterUtil >= 0.70 {
+	if highestIdle <= 0.50 || avgClusterIdle <= 0.30 {
 		return &SavingsOpportunity{
 			Type:       "node_consolidation",
 			Applicable: false,
@@ -114,10 +114,10 @@ func calculateConsolidationSavings(report *analyzer.CostReport) *SavingsOpportun
 
 	return &SavingsOpportunity{
 		Type:           "node_consolidation",
-		MonthlySavings: leastUtilizedNode.MonthlyPrice,
+		MonthlySavings: mostIdleNode.MonthlyPrice,
 		Applicable:     true,
-		Reason:         "Remove least utilized node and redistribute workloads",
-		AffectedNodes:  []string{leastUtilizedNode.Name},
+		Reason:         "Remove most idle node and redistribute workloads",
+		AffectedNodes:  []string{mostIdleNode.Name},
 	}
 }
 

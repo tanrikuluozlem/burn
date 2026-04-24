@@ -22,7 +22,7 @@ func New(apiKey string) *Advisor {
 	)
 	return &Advisor{
 		client: &client,
-		model:  anthropic.ModelClaudeSonnet4_20250514,
+		model:  anthropic.ModelClaudeSonnet4_6,
 	}
 }
 
@@ -77,21 +77,32 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Re
 	}, nil
 }
 
-const systemPrompt = `You are a Kubernetes FinOps expert. Analyze cluster cost data and provide actionable recommendations.
+const systemPrompt = `You are a Kubernetes FinOps expert. Analyze cluster data and provide actionable recommendations.
 
-Focus on:
-- Underutilized nodes that could be downsized or removed
-- On-demand instances that could be spot instances
-- Right-sizing opportunities
-- Consolidation possibilities
+CRITICAL: You MUST return 1-3 recommendations in the recommendations array. Never return empty array.
 
-CRITICAL RULES:
-1. Use the PRE-CALCULATED SAVINGS values provided in the prompt. Do NOT calculate your own savings numbers.
-2. The estimated_savings field MUST match the pre-calculated values exactly.
-3. Only recommend actions that have pre-calculated savings provided.
-4. Recommendations must be non-overlapping - each resource in only ONE recommendation.
+SUMMARY (2 sentences max):
+- Key finding: "X of Y nodes are >Z% idle, wasting $W/month"
+- Best action briefly
 
-Be specific. Include kubectl or eksctl commands when relevant.`
+EACH RECOMMENDATION MUST HAVE:
+- id: unique (e.g., "spot-1")
+- category: "cost"
+- severity: "high" for >$100 savings, "medium" otherwise
+- title: Action with real node names (e.g., "Convert ip-10-5-10-188, ip-10-5-10-213 to Spot")
+- description: Why + risk warning for high severity
+- action: Exact command (e.g., "eksctl create nodegroup --cluster=CLUSTER --spot --nodes=5")
+- estimated_savings: PRE-CALCULATED value (only for primary recommendation)
+
+RISK WARNINGS (MUST add to description):
+- Spot: "⚠️ Only for stateless workloads (Deployments with >1 replica). Do NOT convert StatefulSets, databases, or single-replica services. Spot instances can be interrupted with 2 min notice."
+- Consolidation: "⚠️ Test failover first. Check PodDisruptionBudgets."
+
+RULES:
+1. Use PRE-CALCULATED SAVINGS from prompt exactly
+2. Use REAL node names from data
+3. Only ONE recommendation gets estimated_savings
+4. Pick ONE strategy: spot OR consolidation (not both)`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",
@@ -136,26 +147,25 @@ var recommendationSchema = anthropic.ToolInputSchemaParam{
 func buildPrompt(report *analyzer.CostReport) string {
 	data, _ := json.MarshalIndent(report, "", "  ")
 
-	// Calculate deterministic savings
 	savings := CalculateSavings(report)
 
-	savingsInfo := "\n\nPRE-CALCULATED SAVINGS (use these exact values):\n"
+	savingsInfo := "\n\n---\nPRE-CALCULATED SAVINGS (use these exact values, pick ONE):\n"
 
 	if savings.SpotConversion != nil && savings.SpotConversion.Applicable {
-		savingsInfo += fmt.Sprintf("- Spot conversion: $%.2f/month savings\n", savings.SpotConversion.MonthlySavings)
+		savingsInfo += fmt.Sprintf("• Spot: up to $%.0f/month (only stateless workloads)\n", savings.SpotConversion.MonthlySavings)
 	}
 	if savings.NodeConsolidation != nil && savings.NodeConsolidation.Applicable {
-		savingsInfo += fmt.Sprintf("- Node consolidation: $%.2f/month savings (node: %s)\n",
+		savingsInfo += fmt.Sprintf("• Consolidation: $%.0f/month (remove %s)\n",
 			savings.NodeConsolidation.MonthlySavings,
 			savings.NodeConsolidation.AffectedNodes[0])
 	}
 	if savings.RightSizing != nil && savings.RightSizing.Applicable {
-		savingsInfo += fmt.Sprintf("- Right-sizing: $%.2f/month savings\n", savings.RightSizing.MonthlySavings)
+		savingsInfo += fmt.Sprintf("• Rightsizing: $%.0f/month\n", savings.RightSizing.MonthlySavings)
 	}
 
-	savingsInfo += fmt.Sprintf("\nTotal potential savings: $%.2f/month\n", savings.TotalSavings())
+	savingsInfo += fmt.Sprintf("\nUse $%.0f for estimated_savings (best option).\n", savings.TotalSavings())
 
-	return fmt.Sprintf("Analyze this Kubernetes cluster cost report and provide recommendations:\n\n%s%s", string(data), savingsInfo)
+	return fmt.Sprintf("Cluster data:\n%s%s", string(data), savingsInfo)
 }
 
 type toolInput struct {

@@ -27,6 +27,7 @@ var (
 	verbose       bool
 	sendToSlack   bool
 	slackWebhook  string
+	showAllPods   bool
 )
 
 var analyzeCmd = &cobra.Command{
@@ -46,6 +47,7 @@ func init() {
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	f.BoolVar(&sendToSlack, "slack", false, "send report to Slack")
 	f.StringVar(&slackWebhook, "slack-webhook", "", "Slack webhook URL (or set SLACK_WEBHOOK_URL)")
+	f.BoolVar(&showAllPods, "all", false, "show all pods (default: top 5 wasteful)")
 
 	rootCmd.AddCommand(analyzeCmd)
 }
@@ -87,21 +89,22 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		outputTable(report)
 	}
 
-	if !withAI {
-		return nil
-	}
+	// Get AI recommendations if requested
+	var aiReport *advisor.Report
+	if withAI {
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey == "" {
+			return fmt.Errorf("ANTHROPIC_API_KEY not set")
+		}
 
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY not set")
+		fmt.Println("\nfetching recommendations...")
+		var err error
+		aiReport, err = advisor.New(apiKey).Analyze(ctx, report)
+		if err != nil {
+			return err
+		}
+		outputAIReport(aiReport)
 	}
-
-	fmt.Println("\nfetching recommendations...")
-	aiReport, err := advisor.New(apiKey).Analyze(ctx, report)
-	if err != nil {
-		return err
-	}
-	outputAIReport(aiReport)
 
 	// Send to Slack if requested
 	if sendToSlack {
@@ -114,11 +117,15 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		}
 
 		sc := slack.NewWebhookClient(webhook)
-		if err := sc.Send(ctx, slack.FormatCostReport(report)); err != nil {
+		opts := slack.FormatOptions{ShowAllPods: showAllPods}
+		if err := sc.Send(ctx, slack.FormatCostReportWithOptions(report, opts)); err != nil {
 			return fmt.Errorf("failed to send cost report to Slack: %w", err)
 		}
-		if err := sc.Send(ctx, slack.FormatAIReport(aiReport)); err != nil {
-			return fmt.Errorf("failed to send AI report to Slack: %w", err)
+		// Send AI report only if we have one
+		if aiReport != nil {
+			if err := sc.Send(ctx, slack.FormatAIReport(aiReport)); err != nil {
+				return fmt.Errorf("failed to send AI report to Slack: %w", err)
+			}
 		}
 		fmt.Println("\n✓ Report sent to Slack")
 	}
@@ -133,47 +140,125 @@ func outputJSON(report *analyzer.CostReport) error {
 }
 
 func outputTable(report *analyzer.CostReport) {
-	fmt.Printf("\nCluster Cost Analysis - %s\n", report.GeneratedAt.Format(time.RFC3339))
+	idlePercent := 0.0
+	if report.MonthlyCost > 0 {
+		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
+	}
+
+	fmt.Println()
+	fmt.Println("Kubernetes Cost Report")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("Monthly: $%.0f | Idle: $%.0f (%.0f%%)\n", report.MonthlyCost, report.TotalIdleCost, idlePercent)
+	fmt.Printf("Nodes: %d | Pods: %d\n", report.TotalNodes, report.TotalPods)
 
-	// Show metrics source
-	if report.MetricsSource == "prometheus" {
-		fmt.Println("Metrics: Actual usage (Prometheus)")
-	} else {
-		fmt.Println("Metrics: Resource requests (scheduling view)")
-	}
-
-	fmt.Printf("\nNodes: %d | Pods: %d", report.TotalNodes, report.TotalPods)
-	if report.SkippedNodes > 0 {
-		fmt.Printf(" | Skipped: %d", report.SkippedNodes)
-	}
-	fmt.Printf("\nHourly: $%.4f | Monthly: $%.2f\n\n", report.HourlyCost, report.MonthlyCost)
-
+	// Nodes table
+	fmt.Println("\nNODES")
+	fmt.Println("─────")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NODE\tTYPE\tSPOT\tPODS\tCPU%\tMEM%\tHOURLY\tMONTHLY")
-	fmt.Fprintln(w, "────\t────\t────\t────\t────\t────\t──────\t───────")
+	fmt.Fprintln(w, "NAME\tTYPE\tSPOT\tCOST/MO\tIDLE%")
 
 	for _, n := range report.Nodes {
-		spot := "no"
+		spot := ""
 		if n.IsSpot {
 			spot = "yes"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%.0f%%\t%.0f%%\t$%.4f\t$%.2f\n",
-			truncate(n.Name, 20), n.InstanceType, spot, n.PodCount,
-			n.CPURequested*100, n.MemRequested*100, n.HourlyPrice, n.MonthlyPrice)
+		fmt.Fprintf(w, "%s\t%s\t%s\t$%.0f\t%.0f%%\n",
+			truncate(n.Name, 40), n.InstanceType, spot, n.MonthlyPrice, n.IdlePercent*100)
 	}
 	w.Flush()
 
-	if len(report.WasteAnalysis.UnderutilizedNodes) > 0 {
-		fmt.Printf("\nWaste Analysis:\n")
-		fmt.Printf("  Underutilized: %d nodes\n", len(report.WasteAnalysis.UnderutilizedNodes))
-		fmt.Printf("  Potential savings: $%.2f/mo\n\n", report.WasteAnalysis.PotentialSavings)
+	// Top wasteful pods (Prometheus only)
+	hasPrometheus := report.MetricsSource == "prometheus"
+	if hasPrometheus && len(report.InefficientPods) > 0 {
+		outputTopWastefulPods(report.InefficientPods)
+	} else if !hasPrometheus {
+		fmt.Println("\nTip: Add --prometheus for pod efficiency data")
+	}
 
-		for _, u := range report.WasteAnalysis.UnderutilizedNodes {
-			fmt.Printf("  - %s (%.0f%%): %s\n", u.Name, u.Utilization*100, u.Recommendation)
-		}
+	// Potential savings
+	if report.WasteAnalysis.PotentialSavings > 0 {
+		fmt.Printf("\nPotential savings: $%.0f/mo\n", report.WasteAnalysis.PotentialSavings)
 	}
 }
+
+func outputTopWastefulPods(pods []analyzer.PodEfficiency) {
+	sorted := sortPodsByWaste(pods)
+
+	fmt.Println("\nTOP OVER-PROVISIONED PODS")
+	fmt.Println("─────────────────────────")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAMESPACE\tPOD\tCPU REQ→USED\tMEM REQ→USED\tCOST/MO")
+
+	maxPods := 5
+	if showAllPods || len(sorted) <= maxPods {
+		maxPods = len(sorted)
+	}
+
+	for i := 0; i < maxPods; i++ {
+		p := sorted[i]
+
+		fmt.Fprintf(w, "%s\t%s\t%s → %s\t%s → %s\t$%.0f\n",
+			truncate(p.Namespace, 20),
+			truncate(p.Name, 25),
+			formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
+			formatBytes(p.MemRequest), formatBytes(p.MemUsage),
+			p.MonthlyCost)
+	}
+	w.Flush()
+
+	if len(pods) > maxPods && !showAllPods {
+		fmt.Printf("\n...and %d more pods (use --all to show all)\n", len(pods)-maxPods)
+	}
+}
+
+func formatCores(cores float64) string {
+	m := cores * 1000
+	if m < 1 {
+		return "<1m"
+	}
+	if m >= 1000 {
+		return fmt.Sprintf("%.1f", cores)
+	}
+	return fmt.Sprintf("%.0fm", m)
+}
+
+func formatMillicores(m int64) string {
+	if m >= 1000 {
+		return fmt.Sprintf("%.1f", float64(m)/1000)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+func formatBytes(b int64) string {
+	const (
+		gi = 1024 * 1024 * 1024
+		mi = 1024 * 1024
+	)
+	if b >= gi {
+		return fmt.Sprintf("%.1fGi", float64(b)/float64(gi))
+	}
+	return fmt.Sprintf("%dMi", b/mi)
+}
+
+func sortPodsByWaste(pods []analyzer.PodEfficiency) []analyzer.PodEfficiency {
+	sorted := make([]analyzer.PodEfficiency, len(pods))
+	copy(sorted, pods)
+
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := 0; j < len(sorted)-i-1; j++ {
+			avgEffJ := (sorted[j].CPUEfficiency + sorted[j].MemEfficiency) / 2
+			avgEffJ1 := (sorted[j+1].CPUEfficiency + sorted[j+1].MemEfficiency) / 2
+			wasteJ := sorted[j].MonthlyCost * (1 - avgEffJ)
+			wasteJ1 := sorted[j+1].MonthlyCost * (1 - avgEffJ1)
+
+			if wasteJ < wasteJ1 {
+				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
+			}
+		}
+	}
+	return sorted
+}
+
 
 func truncate(s string, max int) string {
 	if len(s) <= max {
@@ -183,20 +268,37 @@ func truncate(s string, max int) string {
 }
 
 func outputAIReport(report *advisor.Report) {
-	fmt.Println("\nAI Recommendations")
-	fmt.Println("------------------")
+	fmt.Println("\nRECOMMENDATIONS")
+	fmt.Println("───────────────")
 	fmt.Printf("%s\n\n", report.Summary)
-	fmt.Printf("Potential savings: $%.2f/month\n\n", report.TotalPotentialSavings)
 
 	for i, rec := range report.Recommendations {
-		fmt.Printf("%d. [%s] %s\n", i+1, rec.Severity, rec.Title)
+		severityIcon := severityIcon(rec.Severity)
+		fmt.Printf("%s %d. %s\n", severityIcon, i+1, rec.Title)
 		fmt.Printf("   %s\n", rec.Description)
 		if rec.Action != "" {
-			fmt.Printf("   → %s\n", rec.Action)
+			fmt.Printf("   $ %s\n", rec.Action)
 		}
 		if rec.EstimatedSavings > 0 {
-			fmt.Printf("   ~$%.0f/month\n", rec.EstimatedSavings)
+			fmt.Printf("   Save $%.0f/mo\n", rec.EstimatedSavings)
 		}
 		fmt.Println()
+	}
+
+	if report.TotalPotentialSavings > 0 {
+		fmt.Printf("Total potential savings: $%.0f/mo\n", report.TotalPotentialSavings)
+	}
+}
+
+func severityIcon(severity advisor.Severity) string {
+	switch severity {
+	case advisor.SeverityCritical:
+		return "[!!!]"
+	case advisor.SeverityHigh:
+		return "[!!]"
+	case advisor.SeverityMedium:
+		return "[!]"
+	default:
+		return "[i]"
 	}
 }

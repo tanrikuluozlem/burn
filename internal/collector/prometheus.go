@@ -95,7 +95,7 @@ func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]floa
 }
 
 func (p *PrometheusClient) GetNodeMemoryUsage(ctx context.Context) (map[string]int64, error) {
-	query := `node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes`
+	query := `sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) by (instance)`
 	results, err := p.Query(ctx, query)
 	if err != nil {
 		return nil, err

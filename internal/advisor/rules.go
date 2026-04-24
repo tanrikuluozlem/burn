@@ -39,19 +39,15 @@ func CalculateSavings(report *analyzer.CostReport) *PotentialSavings {
 func calculateSpotSavings(report *analyzer.CostReport) *SavingsOpportunity {
 	var onDemandCost float64
 	var onDemandNodes []string
-	var avgUtilization float64
-	nodeCount := 0
 
 	for _, node := range report.Nodes {
 		if !node.IsSpot {
 			onDemandCost += node.MonthlyPrice
 			onDemandNodes = append(onDemandNodes, node.Name)
-			avgUtilization += node.Utilization
-			nodeCount++
 		}
 	}
 
-	if nodeCount == 0 {
+	if len(onDemandNodes) == 0 {
 		return &SavingsOpportunity{
 			Type:       "spot_conversion",
 			Applicable: false,
@@ -59,17 +55,14 @@ func calculateSpotSavings(report *analyzer.CostReport) *SavingsOpportunity {
 		}
 	}
 
-	avgUtilization = avgUtilization / float64(nodeCount)
-
-	// Spot typically saves 60-70%, we use 70% conservatively
-	spotDiscount := 0.70
+	spotDiscount := 0.65
 	monthlySavings := onDemandCost * spotDiscount
 
 	return &SavingsOpportunity{
 		Type:           "spot_conversion",
 		MonthlySavings: monthlySavings,
-		Applicable:     avgUtilization < 0.80, // Only recommend if utilization allows interruption tolerance
-		Reason:         "Convert on-demand instances to spot for 70% savings",
+		Applicable:     true,
+		Reason:         "Max potential savings if stateless workloads moved to spot (65% discount)",
 		AffectedNodes:  onDemandNodes,
 	}
 }
@@ -83,63 +76,72 @@ func calculateConsolidationSavings(report *analyzer.CostReport) *SavingsOpportun
 		}
 	}
 
-	// Find the least utilized node
-	var leastUtilizedNode *analyzer.NodeCost
-	var lowestUtil float64 = 1.0
+	var mostIdleNode *analyzer.NodeCost
+	var highestIdle float64 = 0.0
 
 	for i := range report.Nodes {
 		node := &report.Nodes[i]
-		if node.Utilization < lowestUtil {
-			lowestUtil = node.Utilization
-			leastUtilizedNode = node
+		if node.IdlePercent > highestIdle {
+			highestIdle = node.IdlePercent
+			mostIdleNode = node
 		}
 	}
 
-	// Can consolidate if:
-	// 1. Lowest utilized node is < 50%
-	// 2. Average cluster utilization is < 70%
-	var totalUtil float64
-	for _, node := range report.Nodes {
-		totalUtil += node.Utilization
-	}
-	avgClusterUtil := totalUtil / float64(len(report.Nodes))
-
-	if lowestUtil >= 0.50 || avgClusterUtil >= 0.70 {
+	if highestIdle <= 0.50 {
 		return &SavingsOpportunity{
 			Type:       "node_consolidation",
 			Applicable: false,
-			Reason:     "Utilization too high to consolidate safely",
+			Reason:     "No node is idle enough to consolidate",
+		}
+	}
+
+	// Check if remaining nodes can absorb the workload
+	removedUsed := 1.0 - mostIdleNode.IdlePercent
+	var remainingIdle float64
+	for _, node := range report.Nodes {
+		if node.Name == mostIdleNode.Name {
+			continue
+		}
+		remainingIdle += node.IdlePercent
+	}
+	remainingCount := float64(len(report.Nodes) - 1)
+	avgRemainingIdle := remainingIdle / remainingCount
+
+	// After redistribution, remaining nodes must stay below 80% utilized
+	newUtilization := (1 - avgRemainingIdle) + (removedUsed / remainingCount)
+	if newUtilization > 0.80 {
+		return &SavingsOpportunity{
+			Type:       "node_consolidation",
+			Applicable: false,
+			Reason:     "Remaining nodes cannot safely absorb workload",
 		}
 	}
 
 	return &SavingsOpportunity{
 		Type:           "node_consolidation",
-		MonthlySavings: leastUtilizedNode.MonthlyPrice,
+		MonthlySavings: mostIdleNode.MonthlyPrice,
 		Applicable:     true,
-		Reason:         "Remove least utilized node and redistribute workloads",
-		AffectedNodes:  []string{leastUtilizedNode.Name},
+		Reason:         "Remove most idle node and redistribute workloads",
+		AffectedNodes:  []string{mostIdleNode.Name},
 	}
 }
 
 func calculateRightSizingSavings(report *analyzer.CostReport) *SavingsOpportunity {
-	// Check if memory requested is consistently low (< 40%)
-	// This suggests nodes could be downsized
-	var lowMemNodes []string
+	var lowUtilNodes []string
 	var totalSavings float64
 
 	for _, node := range report.Nodes {
-		if node.MemRequested < 0.40 {
-			lowMemNodes = append(lowMemNodes, node.Name)
-			// Downsizing typically saves ~50% (e.g., t3.large -> t3.medium)
+		if node.CPURequested < 0.40 && node.MemRequested < 0.40 {
+			lowUtilNodes = append(lowUtilNodes, node.Name)
 			totalSavings += node.MonthlyPrice * 0.50
 		}
 	}
 
-	if len(lowMemNodes) == 0 {
+	if len(lowUtilNodes) == 0 {
 		return &SavingsOpportunity{
 			Type:       "right_sizing",
 			Applicable: false,
-			Reason:     "Memory utilization is appropriate for current instance sizes",
+			Reason:     "Resource utilization is appropriate for current instance sizes",
 		}
 	}
 
@@ -147,22 +149,29 @@ func calculateRightSizingSavings(report *analyzer.CostReport) *SavingsOpportunit
 		Type:           "right_sizing",
 		MonthlySavings: totalSavings,
 		Applicable:     true,
-		Reason:         "Downsize instances with low memory utilization",
-		AffectedNodes:  lowMemNodes,
+		Reason:         "Downsize instances with low CPU and memory utilization",
+		AffectedNodes:  lowUtilNodes,
 	}
 }
 
-// TotalSavings returns the sum of all applicable savings
+// TotalSavings returns the max of applicable strategies (they overlap, so summing would be wrong).
 func (p *PotentialSavings) TotalSavings() float64 {
-	var total float64
+	var max float64
 	if p.SpotConversion != nil && p.SpotConversion.Applicable {
-		total += p.SpotConversion.MonthlySavings
+		if p.SpotConversion.MonthlySavings > max {
+			max = p.SpotConversion.MonthlySavings
+		}
 	}
 	if p.NodeConsolidation != nil && p.NodeConsolidation.Applicable {
-		total += p.NodeConsolidation.MonthlySavings
+		if p.NodeConsolidation.MonthlySavings > max {
+			max = p.NodeConsolidation.MonthlySavings
+		}
 	}
 	if p.RightSizing != nil && p.RightSizing.Applicable {
-		total += p.RightSizing.MonthlySavings
+		if p.RightSizing.MonthlySavings > max {
+			max = p.RightSizing.MonthlySavings
+		}
 	}
-	return total
+	return max
 }
+

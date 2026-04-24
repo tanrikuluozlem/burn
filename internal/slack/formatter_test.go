@@ -10,13 +10,14 @@ import (
 
 func TestFormatCostReport(t *testing.T) {
 	report := &analyzer.CostReport{
-		TotalNodes:  2,
-		TotalPods:   10,
-		HourlyCost:  0.50,
-		MonthlyCost: 365.00,
+		TotalNodes:    2,
+		TotalPods:     10,
+		HourlyCost:    0.50,
+		MonthlyCost:   365.00,
+		TotalIdleCost: 100.00,
 		Nodes: []analyzer.NodeCost{
-			{Name: "node-1", InstanceType: "t3.medium", IsSpot: true, Utilization: 0.75, MonthlyPrice: 100},
-			{Name: "node-2", InstanceType: "t3.large", IsSpot: false, Utilization: 0.30, MonthlyPrice: 200},
+			{Name: "node-1", InstanceType: "t3.medium", IsSpot: true, IdlePercent: 0.25, IdleCostMonthly: 25, MonthlyPrice: 100},
+			{Name: "node-2", InstanceType: "t3.large", IsSpot: false, IdlePercent: 0.70, IdleCostMonthly: 140, MonthlyPrice: 200},
 		},
 	}
 
@@ -32,14 +33,15 @@ func TestFormatCostReport(t *testing.T) {
 
 func TestFormatCostReportWithWaste(t *testing.T) {
 	report := &analyzer.CostReport{
-		TotalNodes:  1,
-		TotalPods:   5,
-		HourlyCost:  0.10,
-		MonthlyCost: 73.00,
+		TotalNodes:    1,
+		TotalPods:     5,
+		HourlyCost:    0.10,
+		MonthlyCost:   73.00,
+		TotalIdleCost: 50.00,
 		WasteAnalysis: analyzer.WasteAnalysis{
 			PotentialSavings: 50.0,
 			UnderutilizedNodes: []analyzer.UnderutilizedNode{
-				{Name: "idle-node", Utilization: 0.05, Recommendation: "remove"},
+				{Name: "idle-node", IdlePercent: 0.95, Recommendation: "remove"},
 			},
 		},
 	}
@@ -48,12 +50,12 @@ func TestFormatCostReportWithWaste(t *testing.T) {
 
 	found := false
 	for _, b := range msg.Blocks {
-		if b.Text != nil && strings.Contains(b.Text.Text, "Waste") {
+		if b.Text != nil && strings.Contains(b.Text.Text, "Potential savings") {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected waste analysis block")
+		t.Error("expected potential savings block")
 	}
 }
 
@@ -75,10 +77,11 @@ func TestFormatAIReport(t *testing.T) {
 
 func TestFormatQuickCost(t *testing.T) {
 	report := &analyzer.CostReport{
-		TotalNodes:  3,
-		TotalPods:   20,
-		HourlyCost:  1.0,
-		MonthlyCost: 730.0,
+		TotalNodes:    3,
+		TotalPods:     20,
+		HourlyCost:    1.0,
+		MonthlyCost:   730.0,
+		TotalIdleCost: 200.0,
 	}
 
 	msg := FormatQuickCost(report)

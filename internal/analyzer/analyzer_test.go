@@ -116,7 +116,7 @@ func TestAnalyzeWithPrometheus(t *testing.T) {
 	}
 	// CPU: 2.0 / 4.0 = 0.5 (50% used)
 	// Mem: 4GB / 8GB = 0.5 (50% used)
-	// Used = (0.5 + 0.5) / 2 = 0.5
+	// Used = max(0.5, 0.5) = 0.5
 	// Idle = 1 - 0.5 = 0.5 (50%)
 	if report.Nodes[0].IdlePercent != 0.5 {
 		t.Errorf("IdlePercent = %v, expected 0.5", report.Nodes[0].IdlePercent)
@@ -165,7 +165,7 @@ func TestAnalyzeIdleCost(t *testing.T) {
 	}
 
 	// Without Prometheus, idle is based on requests
-	// Used = (0.25 + 0.25) / 2 = 0.25
+	// Used = max(0.25, 0.25) = 0.25
 	// Idle = 1 - 0.25 = 0.75 (75%)
 	expectedIdle := 0.75
 	if node.IdlePercent != expectedIdle {
@@ -287,7 +287,7 @@ func TestAnalyzeWithoutPrometheus(t *testing.T) {
 		t.Errorf("CPURequested = %v, expected 0.5", report.Nodes[0].CPURequested)
 	}
 
-	// Idle based on requests: 1 - (0.5 + 0.5) / 2 = 0.5
+	// Idle based on requests: 1 - max(0.5, 0.5) = 0.5
 	expectedIdle := 0.5
 	if report.Nodes[0].IdlePercent != expectedIdle {
 		t.Errorf("IdlePercent = %v, expected %v", report.Nodes[0].IdlePercent, expectedIdle)

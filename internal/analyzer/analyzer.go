@@ -3,6 +3,7 @@ package analyzer
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sort"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 
 const (
 	hoursPerMonth    = 730 // average hours in a month
-	highIdlePercent  = 0.7 // 70% idle considered wasteful
+	highIdlePercent  = 0.5 // 50% idle — Cluster Autoscaler default
 	maxPodEfficiency = 10  // show top N inefficient pods
 )
 
@@ -70,7 +71,9 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 					Recommendation: recommendationFor(nc),
 				},
 			)
-			report.WasteAnalysis.PotentialSavings += nc.IdleCostMonthly * 0.7
+			if !nc.IsSpot {
+				report.WasteAnalysis.PotentialSavings += nc.MonthlyPrice * 0.65
+			}
 		}
 	}
 
@@ -108,20 +111,16 @@ func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInf
 		return NodeCost{}, nil, err
 	}
 
-	// Calculate resource requests (what pods asked for as % of node capacity)
 	cpuRequested := resourcePercentage(sumPodCPU(node.Pods), node.CPUAllocatable)
 	memRequested := resourcePercentage(sumPodMemory(node.Pods), node.MemAllocatable)
 
-	// Calculate idle capacity (unused portion of node)
-	// Idle = 1 - requested (based on scheduling view)
-	// If Prometheus available, use actual usage for more accurate idle
 	var usedPercent float64
 	if hasPrometheus && (node.CPUUsage > 0 || node.MemoryUsage > 0) {
 		cpuUsed := node.CPUUsage / (float64(node.CPUAllocatable) / 1000.0)
 		memUsed := float64(node.MemoryUsage) / float64(node.MemAllocatable)
-		usedPercent = (cpuUsed + memUsed) / 2
+		usedPercent = math.Max(cpuUsed, memUsed)
 	} else {
-		usedPercent = (cpuRequested + memRequested) / 2
+		usedPercent = math.Max(cpuRequested, memRequested)
 	}
 
 	idlePercent := 1.0 - usedPercent

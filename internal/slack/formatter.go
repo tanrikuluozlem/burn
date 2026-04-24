@@ -8,52 +8,53 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 )
 
-func FormatCostReport(report *analyzer.CostReport) *Message {
-	metricsNote := "_Based on resource requests (scheduling view)_"
-	if report.MetricsSource == "prometheus" {
-		metricsNote = "_Based on actual usage (Prometheus)_"
-	}
+// FormatOptions configures report formatting
+type FormatOptions struct {
+	ShowAllPods bool
+}
 
+func FormatCostReport(report *analyzer.CostReport) *Message {
+	return FormatCostReportWithOptions(report, FormatOptions{})
+}
+
+func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions) *Message {
 	idlePercent := 0.0
 	if report.MonthlyCost > 0 {
 		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
 	}
+
+	// Header with summary
+	summaryText := fmt.Sprintf("💰 *Monthly:* $%.0f | *Idle:* $%.0f (%.0f%%)\n📦 *Nodes:* %d | *Pods:* %d",
+		report.MonthlyCost, report.TotalIdleCost, idlePercent,
+		report.TotalNodes, report.TotalPods)
 
 	blocks := []Block{
 		{
 			Type: "header",
 			Text: &TextObject{
 				Type: "plain_text",
-				Text: "Daily Kubernetes Cost Report",
+				Text: "Kubernetes Cost Report",
 			},
 		},
 		{
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: metricsNote,
-			},
-		},
-		{
-			Type: "section",
-			Fields: []TextObject{
-				{Type: "mrkdwn", Text: fmt.Sprintf("*Nodes:* %d", report.TotalNodes)},
-				{Type: "mrkdwn", Text: fmt.Sprintf("*Pods:* %d", report.TotalPods)},
-				{Type: "mrkdwn", Text: fmt.Sprintf("*Monthly:* $%.2f", report.MonthlyCost)},
-				{Type: "mrkdwn", Text: fmt.Sprintf("*Idle Cost:* $%.2f (%.0f%%)", report.TotalIdleCost, idlePercent)},
+				Text: summaryText,
 			},
 		},
 	}
 
+	// Nodes section
 	if len(report.Nodes) > 0 {
 		nodeLines := make([]string, 0, len(report.Nodes))
 		for _, n := range report.Nodes {
 			spot := ""
 			if n.IsSpot {
-				spot = " (spot)"
+				spot = " spot"
 			}
-			nodeLines = append(nodeLines, fmt.Sprintf("• `%s` %s%s - $%.2f/mo - $%.2f idle (%.0f%%)",
-				truncate(n.Name, 25), n.InstanceType, spot, n.MonthlyPrice, n.IdleCostMonthly, n.IdlePercent*100))
+			nodeLines = append(nodeLines, fmt.Sprintf("• `%s` %s%s - $%.0f/mo (%.0f%% idle)",
+				truncate(n.Name, 35), n.InstanceType, spot, n.MonthlyPrice, n.IdlePercent*100))
 		}
 
 		blocks = append(blocks, Block{
@@ -65,55 +66,81 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 		})
 	}
 
-	// Show pod efficiency when Prometheus is available
+	// Top wasteful pods (Prometheus required)
 	if report.MetricsSource == "prometheus" && len(report.InefficientPods) > 0 {
-		blocks = append(blocks, Block{Type: "divider"})
+		// Sort by waste (lowest efficiency = highest waste)
+		pods := sortPodsByWaste(report.InefficientPods)
 
-		effLines := []string{"*Top Inefficient Pods (by CPU):*", ""}
-		for _, p := range report.InefficientPods {
-			status := ":white_check_mark:"
-			if p.CPUEfficiency < 0.5 {
-				status = ":warning:"
-			}
-			effLines = append(effLines, fmt.Sprintf("• `%s/%s` CPU: %.0f%% eff %s",
-				truncate(p.Namespace, 10), truncate(p.Name, 20), p.CPUEfficiency*100, status))
+		// Show top 5 or all if opts.ShowAllPods
+		maxPods := 5
+		if opts.ShowAllPods || len(pods) <= maxPods {
+			maxPods = len(pods)
 		}
 
-		effLines = append(effLines, "", "_Pods using <50% of requested CPU. Consider reducing requests._")
+		podLines := make([]string, 0, maxPods)
+		for i := 0; i < maxPods; i++ {
+			p := pods[i]
+
+			podLines = append(podLines, fmt.Sprintf("• `%s/%s` — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
+				truncate(p.Namespace, 15), truncate(p.Name, 25),
+				p.MonthlyCost,
+				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
+				formatBytes(p.MemRequest), formatBytes(p.MemUsage)))
+		}
+
+		if len(report.InefficientPods) > maxPods && !opts.ShowAllPods {
+			podLines = append(podLines, fmt.Sprintf("_...and %d more pods_", len(report.InefficientPods)-maxPods))
+		}
 
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: strings.Join(effLines, "\n"),
+				Text: "*Top Over-Provisioned Pods:*\n" + strings.Join(podLines, "\n"),
+			},
+		})
+	} else if report.MetricsSource != "prometheus" {
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: "_💡 Add --prometheus for pod efficiency data_",
 			},
 		})
 	}
 
-	if len(report.WasteAnalysis.UnderutilizedNodes) > 0 {
-		blocks = append(blocks, Block{
-			Type: "divider",
-		})
-
-		wasteLines := []string{
-			fmt.Sprintf("*Potential Monthly Savings:* $%.2f", report.WasteAnalysis.PotentialSavings),
-			"",
-		}
-		for _, u := range report.WasteAnalysis.UnderutilizedNodes {
-			wasteLines = append(wasteLines, fmt.Sprintf("• `%s` (%.0f%% idle): %s",
-				truncate(u.Name, 25), u.IdlePercent*100, u.Recommendation))
-		}
-
+	// Potential savings
+	if report.WasteAnalysis.PotentialSavings > 0 {
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: "*High Idle Nodes:*\n" + strings.Join(wasteLines, "\n"),
+				Text: fmt.Sprintf("*Potential savings:* $%.0f/mo", report.WasteAnalysis.PotentialSavings),
 			},
 		})
 	}
 
 	return &Message{Blocks: blocks}
+}
+
+// sortPodsByWaste sorts pods by waste amount (highest waste first)
+func sortPodsByWaste(pods []analyzer.PodEfficiency) []analyzer.PodEfficiency {
+	sorted := make([]analyzer.PodEfficiency, len(pods))
+	copy(sorted, pods)
+
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := 0; j < len(sorted)-i-1; j++ {
+			avgEffJ := (sorted[j].CPUEfficiency + sorted[j].MemEfficiency) / 2
+			avgEffJ1 := (sorted[j+1].CPUEfficiency + sorted[j+1].MemEfficiency) / 2
+			wasteJ := sorted[j].MonthlyCost * (1 - avgEffJ)
+			wasteJ1 := sorted[j+1].MonthlyCost * (1 - avgEffJ1)
+
+			if wasteJ < wasteJ1 {
+				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
+			}
+		}
+	}
+	return sorted
 }
 
 func FormatAIReport(report *advisor.Report) *Message {
@@ -122,7 +149,7 @@ func FormatAIReport(report *advisor.Report) *Message {
 			Type: "header",
 			Text: &TextObject{
 				Type: "plain_text",
-				Text: "AI Cost Optimization Recommendations",
+				Text: "Recommendations",
 			},
 		},
 		{
@@ -134,24 +161,14 @@ func FormatAIReport(report *advisor.Report) *Message {
 		},
 	}
 
-	if report.TotalPotentialSavings > 0 {
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Total Potential Savings:* $%.2f/month", report.TotalPotentialSavings),
-			},
-		})
-	}
-
 	for i, rec := range report.Recommendations {
 		severity := severityEmoji(rec.Severity)
 		recText := fmt.Sprintf("%s *%d. %s*\n%s", severity, i+1, rec.Title, rec.Description)
 		if rec.Action != "" {
-			recText += fmt.Sprintf("\n→ %s", rec.Action)
+			recText += fmt.Sprintf("\n`%s`", rec.Action)
 		}
 		if rec.EstimatedSavings > 0 {
-			recText += fmt.Sprintf("\n_~$%.0f/month_", rec.EstimatedSavings)
+			recText += fmt.Sprintf("\n💰 Save $%.0f/mo", rec.EstimatedSavings)
 		}
 
 		blocks = append(blocks, Block{
@@ -159,6 +176,16 @@ func FormatAIReport(report *advisor.Report) *Message {
 			Text: &TextObject{
 				Type: "mrkdwn",
 				Text: recText,
+			},
+		})
+	}
+
+	if report.TotalPotentialSavings > 0 {
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*Total potential savings: $%.0f/mo*", report.TotalPotentialSavings),
 			},
 		})
 	}
@@ -202,12 +229,12 @@ func FormatQuickCost(report *analyzer.CostReport) *Message {
 }
 
 func severityEmoji(severity advisor.Severity) string {
-	switch severity {
-	case advisor.SeverityCritical:
+	switch strings.ToLower(string(severity)) {
+	case "critical":
 		return ":red_circle:"
-	case advisor.SeverityHigh:
+	case "high":
 		return ":large_orange_circle:"
-	case advisor.SeverityMedium:
+	case "medium":
 		return ":large_yellow_circle:"
 	default:
 		return ":white_circle:"
@@ -220,3 +247,33 @@ func truncate(s string, max int) string {
 	}
 	return s[:max-3] + "..."
 }
+
+func formatCores(cores float64) string {
+	m := cores * 1000
+	if m < 1 {
+		return "<1m"
+	}
+	if m >= 1000 {
+		return fmt.Sprintf("%.1f", cores)
+	}
+	return fmt.Sprintf("%.0fm", m)
+}
+
+func formatMillicores(m int64) string {
+	if m >= 1000 {
+		return fmt.Sprintf("%.1f", float64(m)/1000)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+func formatBytes(b int64) string {
+	const (
+		gi = 1024 * 1024 * 1024
+		mi = 1024 * 1024
+	)
+	if b >= gi {
+		return fmt.Sprintf("%.1fGi", float64(b)/float64(gi))
+	}
+	return fmt.Sprintf("%dMi", b/mi)
+}
+

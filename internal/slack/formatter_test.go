@@ -50,12 +50,12 @@ func TestFormatCostReportWithWaste(t *testing.T) {
 
 	found := false
 	for _, b := range msg.Blocks {
-		if b.Text != nil && strings.Contains(b.Text.Text, "High Idle") {
+		if b.Text != nil && strings.Contains(b.Text.Text, "Potential savings") {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected high idle nodes block")
+		t.Error("expected potential savings block")
 	}
 }
 

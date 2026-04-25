@@ -66,45 +66,41 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 		})
 	}
 
-	// Top wasteful pods (Prometheus required)
-	if report.MetricsSource == "prometheus" && len(report.InefficientPods) > 0 {
-		// Sort by waste (lowest efficiency = highest waste)
-		pods := sortPodsByWaste(report.InefficientPods)
+	hasPrometheus := report.MetricsSource == "prometheus"
 
-		// Show top 5 or all if opts.ShowAllPods
-		maxPods := 5
-		if opts.ShowAllPods || len(pods) <= maxPods {
-			maxPods = len(pods)
+	if len(report.Namespaces) > 0 {
+		nsLines := make([]string, 0, len(report.Namespaces))
+		var allocated float64
+		for _, ns := range report.Namespaces {
+			allocated += ns.MonthlyCost
+			if hasPrometheus {
+				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
+					ns.Name, ns.PodCount, ns.MonthlyCost,
+					formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
+					formatBytes(ns.MemRequest), formatBytes(ns.MemUsage)))
+			} else {
+				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.0f/mo",
+					ns.Name, ns.PodCount, ns.MonthlyCost))
+			}
 		}
-
-		podLines := make([]string, 0, maxPods)
-		for i := 0; i < maxPods; i++ {
-			p := pods[i]
-
-			podLines = append(podLines, fmt.Sprintf("• `%s/%s` — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
-				truncate(p.Namespace, 15), truncate(p.Name, 25),
-				p.MonthlyCost,
-				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
-				formatBytes(p.MemRequest), formatBytes(p.MemUsage)))
+		idle := report.MonthlyCost - allocated
+		if idle > 0 {
+			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.0f/mo", idle))
 		}
-
-		if len(report.InefficientPods) > maxPods && !opts.ShowAllPods {
-			podLines = append(podLines, fmt.Sprintf("_...and %d more pods_", len(report.InefficientPods)-maxPods))
-		}
-
+		nsLines = append(nsLines, fmt.Sprintf("*Total: $%.0f/mo*", report.MonthlyCost))
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: "*Top Over-Provisioned Pods:*\n" + strings.Join(podLines, "\n"),
+				Text: "*Cost by Namespace:*\n" + strings.Join(nsLines, "\n"),
 			},
 		})
-	} else if report.MetricsSource != "prometheus" {
+	} else if !hasPrometheus {
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: "_💡 Add --prometheus for pod efficiency data_",
+				Text: "_💡 Add --prometheus for usage data_",
 			},
 		})
 	}

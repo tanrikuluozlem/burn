@@ -116,10 +116,16 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 		question := strings.TrimPrefix(text, "ask ")
 		question = strings.Trim(question, "\"'")
 		response, err = s.handleAsk(ctx, question)
+	case strings.HasPrefix(text, "namespace "), strings.HasPrefix(text, "ns "):
+		ns := text
+		ns = strings.TrimPrefix(ns, "namespace ")
+		ns = strings.TrimPrefix(ns, "ns ")
+		ns = strings.TrimSpace(ns)
+		response, err = s.handleNamespace(ctx, ns)
 	case text == "" || text == "analyze":
 		response, err = s.handleAnalyze(ctx)
 	default:
-		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn analyze\n  /burn ask \"your question\"", text)
+		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn — namespace cost summary\n  /burn ns <name> — pod details\n  /burn ask \"your question\"", text)
 	}
 
 	if err != nil {
@@ -131,47 +137,110 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 }
 
 func (s *Server) handleAsk(ctx context.Context, question string) (string, error) {
-	info, err := s.collector.Collect(ctx)
+	report, err := s.getReport(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to collect cluster data: %w", err)
+		return "", err
 	}
-
-	pp, err := pricing.NewCloudPricingProvider(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get pricing: %w", err)
-	}
-
-	report, err := analyzer.New(pp).Analyze(ctx, info)
-	if err != nil {
-		return "", fmt.Errorf("failed to analyze: %w", err)
-	}
-
 	return s.advisor.Ask(ctx, report, question)
 }
 
 func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
+	report, err := s.getReport(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	idlePercent := 0.0
+	if report.MonthlyCost > 0 {
+		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
+	}
+
+	summary := fmt.Sprintf("*Kubernetes Cost Report*\n"+
+		"💰 Monthly: $%.0f | Idle: $%.0f (%.0f%%)\n"+
+		"📦 Nodes: %d | Pods: %d",
+		report.MonthlyCost, report.TotalIdleCost, idlePercent,
+		report.TotalNodes, report.TotalPods)
+
+	hasPrometheus := report.MetricsSource == "prometheus"
+	if len(report.Namespaces) > 0 {
+		summary += "\n\n*Cost by Namespace:*"
+		var allocated float64
+		for _, ns := range report.Namespaces {
+			allocated += ns.MonthlyCost
+			if hasPrometheus {
+				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
+					ns.Name, ns.PodCount, ns.MonthlyCost,
+					formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
+					formatBytes(ns.MemRequest), formatBytes(ns.MemUsage))
+			} else {
+				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.0f/mo", ns.Name, ns.PodCount, ns.MonthlyCost)
+			}
+		}
+		idle := report.MonthlyCost - allocated
+		if idle > 0 {
+			summary += fmt.Sprintf("\n• _Idle (unallocated)_ — $%.0f/mo", idle)
+		}
+		summary += fmt.Sprintf("\n*Total: $%.0f/mo*", report.MonthlyCost)
+	}
+
+	if report.WasteAnalysis.PotentialSavings > 0 {
+		summary += fmt.Sprintf("\n\n_Potential savings: $%.0f/mo_", report.WasteAnalysis.PotentialSavings)
+	}
+
+	return summary, nil
+}
+
+func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error) {
+	report, err := s.getReport(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var pods []analyzer.PodEfficiency
+	for _, p := range report.AllPods {
+		if p.Namespace == ns {
+			pods = append(pods, p)
+		}
+	}
+
+	if len(pods) == 0 {
+		return fmt.Sprintf("No pods found in namespace `%s`", ns), nil
+	}
+
+	var totalCost float64
+	for _, p := range pods {
+		totalCost += p.MonthlyCost
+	}
+
+	hasPrometheus := report.MetricsSource == "prometheus"
+	result := fmt.Sprintf("*Namespace: %s* (%d pods, $%.0f/mo)\n", ns, len(pods), totalCost)
+
+	for _, p := range pods {
+		if hasPrometheus {
+			result += fmt.Sprintf("\n• `%s` — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
+				p.Name, p.MonthlyCost,
+				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
+				formatBytes(p.MemRequest), formatBytes(p.MemUsage))
+		} else {
+			result += fmt.Sprintf("\n• `%s` — $%.0f/mo", p.Name, p.MonthlyCost)
+		}
+	}
+
+	return result, nil
+}
+
+func (s *Server) getReport(ctx context.Context) (*analyzer.CostReport, error) {
 	info, err := s.collector.Collect(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to collect cluster data: %w", err)
+		return nil, fmt.Errorf("failed to collect cluster data: %w", err)
 	}
 
 	pp, err := pricing.NewCloudPricingProvider(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get pricing: %w", err)
+		return nil, fmt.Errorf("failed to get pricing: %w", err)
 	}
 
-	report, err := analyzer.New(pp).Analyze(ctx, info)
-	if err != nil {
-		return "", fmt.Errorf("failed to analyze: %w", err)
-	}
-
-	// Format summary
-	return fmt.Sprintf("*Cluster Cost Summary*\n"+
-		"Nodes: %d | Pods: %d\n"+
-		"Monthly: $%.2f\n"+
-		"Potential Savings: $%.2f/mo",
-		report.TotalNodes, report.TotalPods,
-		report.MonthlyCost, report.WasteAnalysis.PotentialSavings), nil
+	return analyzer.New(pp).Analyze(ctx, info)
 }
 
 func (s *Server) sendSlackResponse(responseURL, text string) {
@@ -199,4 +268,33 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 		return
 	}
 	resp.Body.Close()
+}
+
+func formatCores(cores float64) string {
+	m := cores * 1000
+	if m < 1 {
+		return "<1m"
+	}
+	if m >= 1000 {
+		return fmt.Sprintf("%.1f", cores)
+	}
+	return fmt.Sprintf("%.0fm", m)
+}
+
+func formatMillicores(m int64) string {
+	if m >= 1000 {
+		return fmt.Sprintf("%.1f", float64(m)/1000)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+func formatBytes(b int64) string {
+	const (
+		gi = 1024 * 1024 * 1024
+		mi = 1024 * 1024
+	)
+	if b >= gi {
+		return fmt.Sprintf("%.1fGi", float64(b)/float64(gi))
+	}
+	return fmt.Sprintf("%dMi", b/mi)
 }

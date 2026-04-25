@@ -293,3 +293,69 @@ func TestAnalyzeWithoutPrometheus(t *testing.T) {
 		t.Errorf("IdlePercent = %v, expected %v", report.Nodes[0].IdlePercent, expectedIdle)
 	}
 }
+
+func TestAggregateByNamespace(t *testing.T) {
+	pods := []PodEfficiency{
+		{Name: "pod-1", Namespace: "argocd", CPURequest: 500, CPUUsage: 0.1, MemRequest: 512 * 1024 * 1024, MemUsage: 100 * 1024 * 1024, MonthlyCost: 10},
+		{Name: "pod-2", Namespace: "argocd", CPURequest: 500, CPUUsage: 0.1, MemRequest: 512 * 1024 * 1024, MemUsage: 100 * 1024 * 1024, MonthlyCost: 10},
+		{Name: "pod-3", Namespace: "default", CPURequest: 1000, CPUUsage: 0.5, MemRequest: 1024 * 1024 * 1024, MemUsage: 500 * 1024 * 1024, MonthlyCost: 25},
+	}
+
+	namespaces := aggregateByNamespace(pods)
+
+	if len(namespaces) != 2 {
+		t.Fatalf("expected 2 namespaces, got %d", len(namespaces))
+	}
+
+	// Sorted by cost desc: default ($25) first
+	if namespaces[0].Name != "default" {
+		t.Errorf("expected default first (highest cost), got %s", namespaces[0].Name)
+	}
+	if namespaces[0].MonthlyCost != 25 {
+		t.Errorf("default cost = %v, want 25", namespaces[0].MonthlyCost)
+	}
+
+	// argocd: 2 pods, $20 total
+	if namespaces[1].PodCount != 2 {
+		t.Errorf("argocd pod count = %d, want 2", namespaces[1].PodCount)
+	}
+	if namespaces[1].MonthlyCost != 20 {
+		t.Errorf("argocd cost = %v, want 20", namespaces[1].MonthlyCost)
+	}
+	if namespaces[1].CPURequest != 1000 {
+		t.Errorf("argocd CPURequest = %d, want 1000", namespaces[1].CPURequest)
+	}
+}
+
+func TestAnalyzePopulatesNamespaces(t *testing.T) {
+	a := New(&mockPricing{price: 0.10})
+
+	info := &collector.ClusterInfo{
+		TotalNodes: 1,
+		TotalPods:  2,
+		Nodes: []collector.NodeInfo{{
+			Name:           "node-1",
+			InstanceType:   "t3.large",
+			Region:         "us-east-1",
+			CPUAllocatable: 4000,
+			MemAllocatable: 8 * 1024 * 1024 * 1024,
+			Pods: []collector.PodInfo{
+				{Name: "web-1", Namespace: "prod", CPURequest: 500, MemoryRequest: 512 * 1024 * 1024},
+				{Name: "web-2", Namespace: "dev", CPURequest: 200, MemoryRequest: 256 * 1024 * 1024},
+			},
+		}},
+	}
+
+	report, err := a.Analyze(context.Background(), info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Namespaces) != 2 {
+		t.Fatalf("expected 2 namespaces, got %d", len(report.Namespaces))
+	}
+
+	if len(report.AllPods) != 2 {
+		t.Fatalf("expected 2 AllPods, got %d", len(report.AllPods))
+	}
+}

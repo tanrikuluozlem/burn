@@ -82,15 +82,19 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 	report.TotalIdleCost = totalIdleHourly * hoursPerMonth
 	report.SkippedNodes = skipped
 
-	// Sort pods by efficiency (lowest first) and take top N
+	report.AllPods = allPods
+	report.Namespaces = aggregateByNamespace(allPods)
+
 	if hasPrometheus && len(allPods) > 0 {
-		sort.Slice(allPods, func(i, j int) bool {
-			return allPods[i].CPUEfficiency < allPods[j].CPUEfficiency
+		sorted := make([]PodEfficiency, len(allPods))
+		copy(sorted, allPods)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].CPUEfficiency < sorted[j].CPUEfficiency
 		})
-		if len(allPods) > maxPodEfficiency {
-			allPods = allPods[:maxPodEfficiency]
+		if len(sorted) > maxPodEfficiency {
+			sorted = sorted[:maxPodEfficiency]
 		}
-		report.InefficientPods = allPods
+		report.InefficientPods = sorted
 	}
 
 	return report, nil
@@ -129,11 +133,7 @@ func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInf
 	}
 	idleCostHourly := price * idlePercent
 
-	// Calculate pod efficiency (only if Prometheus available)
-	var podEfficiencies []PodEfficiency
-	if hasPrometheus {
-		podEfficiencies = calculatePodEfficiencies(node.Pods, price, node.CPUAllocatable, node.MemAllocatable)
-	}
+	podEfficiencies := calculatePodEfficiencies(node.Pods, price, node.CPUAllocatable, node.MemAllocatable)
 
 	return NodeCost{
 		Name:            node.Name,
@@ -191,6 +191,33 @@ func calculatePodEfficiencies(pods []collector.PodInfo, nodeHourlyPrice float64,
 		})
 	}
 
+	return result
+}
+
+func aggregateByNamespace(pods []PodEfficiency) []NamespaceCost {
+	nsMap := make(map[string]*NamespaceCost)
+	for _, p := range pods {
+		ns, ok := nsMap[p.Namespace]
+		if !ok {
+			ns = &NamespaceCost{Name: p.Namespace}
+			nsMap[p.Namespace] = ns
+		}
+		ns.PodCount++
+		ns.CPURequest += p.CPURequest
+		ns.CPUUsage += p.CPUUsage
+		ns.MemRequest += p.MemRequest
+		ns.MemUsage += p.MemUsage
+		ns.MonthlyCost += p.MonthlyCost
+	}
+
+	result := make([]NamespaceCost, 0, len(nsMap))
+	for _, ns := range nsMap {
+		result = append(result, *ns)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].MonthlyCost > result[j].MonthlyCost
+	})
 	return result
 }
 

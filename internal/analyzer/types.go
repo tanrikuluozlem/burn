@@ -12,6 +12,8 @@ type CostReport struct {
 	TotalIdleCost   float64 // monthly idle cost
 	Nodes           []NodeCost
 	InefficientPods []PodEfficiency
+	Namespaces      []NamespaceCost   `json:"namespaces,omitempty"`
+	AllPods         []PodEfficiency   `json:"-"`
 	WasteAnalysis   WasteAnalysis
 	MetricsSource   string // "prometheus" or "requests"
 }
@@ -45,6 +47,16 @@ type PodEfficiency struct {
 	MemUsage      int64   // bytes (from Prometheus)
 	MemEfficiency float64 // usage/request ratio (0-1+)
 	MonthlyCost   float64 // estimated cost based on requests
+}
+
+type NamespaceCost struct {
+	Name       string  `json:"name"`
+	PodCount   int     `json:"pod_count"`
+	CPURequest int64   `json:"cpu_request"` // total millicores
+	CPUUsage   float64 `json:"cpu_usage"`   // total cores
+	MemRequest int64   `json:"mem_request"` // total bytes
+	MemUsage   int64   `json:"mem_usage"`   // total bytes
+	MonthlyCost float64 `json:"monthly_cost"`
 }
 
 type WasteAnalysis struct {

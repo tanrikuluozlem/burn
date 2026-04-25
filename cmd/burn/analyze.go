@@ -167,18 +167,90 @@ func outputTable(report *analyzer.CostReport) {
 	}
 	w.Flush()
 
-	// Top wasteful pods (Prometheus only)
 	hasPrometheus := report.MetricsSource == "prometheus"
-	if hasPrometheus && len(report.InefficientPods) > 0 {
-		outputTopWastefulPods(report.InefficientPods)
+
+	if namespace != "" && len(report.AllPods) > 0 {
+		outputNamespacePods(report.AllPods, hasPrometheus)
+	} else if len(report.Namespaces) > 0 {
+		outputNamespaceSummary(report.Namespaces, hasPrometheus, report.MonthlyCost)
 	} else if !hasPrometheus {
-		fmt.Println("\nTip: Add --prometheus for pod efficiency data")
+		fmt.Println("\nTip: Add --prometheus for usage data")
 	}
 
-	// Potential savings
-	if report.WasteAnalysis.PotentialSavings > 0 {
+	if namespace == "" && report.WasteAnalysis.PotentialSavings > 0 {
 		fmt.Printf("\nPotential savings: $%.0f/mo\n", report.WasteAnalysis.PotentialSavings)
 	}
+}
+
+func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus bool, monthlyCost float64) {
+	fmt.Println("\nNAMESPACES")
+	fmt.Println("──────────")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	if hasPrometheus {
+		fmt.Fprintln(w, "NAMESPACE\tPODS\tCPU REQ→USED\tMEM REQ→USED\tCOST/MO")
+	} else {
+		fmt.Fprintln(w, "NAMESPACE\tPODS\tCPU REQ\tMEM REQ\tCOST/MO")
+	}
+
+	var allocated float64
+	for _, ns := range namespaces {
+		allocated += ns.MonthlyCost
+		if hasPrometheus {
+			fmt.Fprintf(w, "%s\t%d\t%s → %s\t%s → %s\t$%.0f\n",
+				truncate(ns.Name, 25),
+				ns.PodCount,
+				formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
+				formatBytes(ns.MemRequest), formatBytes(ns.MemUsage),
+				ns.MonthlyCost)
+		} else {
+			fmt.Fprintf(w, "%s\t%d\t%s\t%s\t$%.0f\n",
+				truncate(ns.Name, 25),
+				ns.PodCount,
+				formatMillicores(ns.CPURequest),
+				formatBytes(ns.MemRequest),
+				ns.MonthlyCost)
+		}
+	}
+
+	idle := monthlyCost - allocated
+	w.Flush()
+	if idle > 0 {
+		fmt.Printf("%-25s%s$%.0f\n", "Idle (unallocated)", "                              ", idle)
+		fmt.Println("─────────────────────────────────────────────────────────")
+		fmt.Printf("%-25s%s$%.0f\n", "Total", "                              ", monthlyCost)
+	}
+}
+
+func outputNamespacePods(pods []analyzer.PodEfficiency, hasPrometheus bool) {
+	ns := pods[0].Namespace
+	var totalCost float64
+	for _, p := range pods {
+		totalCost += p.MonthlyCost
+	}
+	fmt.Printf("\nNAMESPACE: %s (%d pods, $%.0f/mo)\n", ns, len(pods), totalCost)
+	fmt.Println("──────────────────────────────────")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+	if hasPrometheus {
+		fmt.Fprintln(w, "POD\tCPU REQ→USED\tMEM REQ→USED\tCOST/MO")
+		for _, p := range pods {
+			fmt.Fprintf(w, "%s\t%s → %s\t%s → %s\t$%.0f\n",
+				truncate(p.Name, 35),
+				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
+				formatBytes(p.MemRequest), formatBytes(p.MemUsage),
+				p.MonthlyCost)
+		}
+	} else {
+		fmt.Fprintln(w, "POD\tCPU REQ\tMEM REQ\tCOST/MO")
+		for _, p := range pods {
+			fmt.Fprintf(w, "%s\t%s\t%s\t$%.0f\n",
+				truncate(p.Name, 35),
+				formatMillicores(p.CPURequest),
+				formatBytes(p.MemRequest),
+				p.MonthlyCost)
+		}
+	}
+	w.Flush()
 }
 
 func outputTopWastefulPods(pods []analyzer.PodEfficiency) {

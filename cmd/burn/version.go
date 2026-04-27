@@ -6,13 +6,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.1.0"
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("burn %s\n", version)
+		fmt.Printf("burn %s (commit: %s, built: %s)\n", version, commit, date)
 	},
 }
 

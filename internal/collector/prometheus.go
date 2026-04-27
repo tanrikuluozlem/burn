@@ -13,15 +13,24 @@ import (
 type PrometheusClient struct {
 	baseURL    string
 	httpClient *http.Client
+	period     string
 }
 
-func NewPrometheusClient(baseURL string) *PrometheusClient {
+func NewPrometheusClient(baseURL, period string) *PrometheusClient {
 	return &PrometheusClient{
 		baseURL: baseURL,
+		period:  period,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+func (p *PrometheusClient) wrapQuery(query string) string {
+	if p.period == "" {
+		return query
+	}
+	return fmt.Sprintf("avg_over_time(%s[%s:5m])", query, p.period)
 }
 
 type promResponse struct {
@@ -72,7 +81,7 @@ func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResul
 
 func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]float64, error) {
 	// Use instance label (standard node-exporter) - try node label first (kube-prometheus-stack)
-	query := `sum(rate(node_cpu_seconds_total{mode!="idle"}[5m])) by (instance)`
+	query := p.wrapQuery(`sum(rate(node_cpu_seconds_total{mode!="idle"}[5m])) by (instance)`)
 	results, err := p.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -95,7 +104,7 @@ func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]floa
 }
 
 func (p *PrometheusClient) GetNodeMemoryUsage(ctx context.Context) (map[string]int64, error) {
-	query := `sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) by (instance)`
+	query := p.wrapQuery(`sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) by (instance)`)
 	results, err := p.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -118,7 +127,7 @@ func (p *PrometheusClient) GetNodeMemoryUsage(ctx context.Context) (map[string]i
 }
 
 func (p *PrometheusClient) GetPodCPUUsage(ctx context.Context) (map[string]float64, error) {
-	query := `sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) by (pod, namespace)`
+	query := p.wrapQuery(`sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) by (pod, namespace)`)
 	results, err := p.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -140,7 +149,7 @@ func (p *PrometheusClient) GetPodCPUUsage(ctx context.Context) (map[string]float
 }
 
 func (p *PrometheusClient) GetPodMemoryUsage(ctx context.Context) (map[string]int64, error) {
-	query := `sum(container_memory_working_set_bytes{container!="",container!="POD"}) by (pod, namespace)`
+	query := p.wrapQuery(`sum(container_memory_working_set_bytes{container!="",container!="POD"}) by (pod, namespace)`)
 	results, err := p.Query(ctx, query)
 	if err != nil {
 		return nil, err

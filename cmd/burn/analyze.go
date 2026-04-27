@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"text/tabwriter"
 	"time"
 
@@ -16,6 +17,12 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/slack"
 	"github.com/spf13/cobra"
 )
+
+var validPeriod = regexp.MustCompile(`^\d+[smhdwy]$`)
+
+func isValidPeriod(p string) bool {
+	return validPeriod.MatchString(p)
+}
 
 var (
 	namespace     string
@@ -28,6 +35,7 @@ var (
 	sendToSlack   bool
 	slackWebhook  string
 	showAllPods   bool
+	period        string
 )
 
 var analyzeCmd = &cobra.Command{
@@ -48,6 +56,7 @@ func init() {
 	f.BoolVar(&sendToSlack, "slack", false, "send report to Slack")
 	f.StringVar(&slackWebhook, "slack-webhook", "", "Slack webhook URL (or set SLACK_WEBHOOK_URL)")
 	f.BoolVar(&showAllPods, "all", false, "show all pods (default: top 5 wasteful)")
+	f.StringVar(&period, "period", "", "analysis period (e.g. 1h, 7d, 30d)")
 
 	rootCmd.AddCommand(analyzeCmd)
 }
@@ -59,10 +68,14 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		})))
 	}
 
+	if period != "" && !isValidPeriod(period) {
+		return fmt.Errorf("invalid period %q: use Prometheus duration format (e.g. 1h, 7d, 30d)", period)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL)
+	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL, period)
 	if err != nil {
 		return err
 	}
@@ -81,6 +94,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	report.Period = period
 
 	switch output {
 	case "json":
@@ -140,18 +154,35 @@ func outputJSON(report *analyzer.CostReport) error {
 }
 
 func outputTable(report *analyzer.CostReport) {
+	hasPrometheus := report.MetricsSource == "prometheus"
+
+	// Namespace detail view
+	if namespace != "" {
+		fmt.Println()
+		if len(report.AllPods) > 0 {
+			outputNamespacePods(report.AllPods, hasPrometheus)
+		} else {
+			fmt.Printf("No pods found in namespace %s\n", namespace)
+		}
+		return
+	}
+
+	// Cluster-wide view
 	idlePercent := 0.0
 	if report.MonthlyCost > 0 {
 		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
 	}
 
 	fmt.Println()
-	fmt.Println("Kubernetes Cost Report")
+	header := "Kubernetes Cost Report"
+	if report.Period != "" {
+		header += fmt.Sprintf(" (%s avg)", report.Period)
+	}
+	fmt.Println(header)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("Monthly: $%.0f | Idle: $%.0f (%.0f%%)\n", report.MonthlyCost, report.TotalIdleCost, idlePercent)
 	fmt.Printf("Nodes: %d | Pods: %d\n", report.TotalNodes, report.TotalPods)
 
-	// Nodes table
 	fmt.Println("\nNODES")
 	fmt.Println("─────")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -167,17 +198,11 @@ func outputTable(report *analyzer.CostReport) {
 	}
 	w.Flush()
 
-	hasPrometheus := report.MetricsSource == "prometheus"
-
-	if namespace != "" && len(report.AllPods) > 0 {
-		outputNamespacePods(report.AllPods, hasPrometheus)
-	} else if len(report.Namespaces) > 0 {
+	if len(report.Namespaces) > 0 {
 		outputNamespaceSummary(report.Namespaces, hasPrometheus, report.MonthlyCost)
-	} else if !hasPrometheus {
-		fmt.Println("\nTip: Add --prometheus for usage data")
 	}
 
-	if namespace == "" && report.WasteAnalysis.PotentialSavings > 0 {
+	if report.WasteAnalysis.PotentialSavings > 0 {
 		fmt.Printf("\nPotential savings: $%.0f/mo\n", report.WasteAnalysis.PotentialSavings)
 	}
 }

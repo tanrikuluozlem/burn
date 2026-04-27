@@ -102,7 +102,8 @@ RULES:
 1. Use PRE-CALCULATED SAVINGS from prompt exactly
 2. Use REAL node names from data
 3. Only ONE recommendation gets estimated_savings
-4. Pick ONE strategy: spot OR consolidation (not both)`
+4. Pick ONE strategy: spot OR consolidation (not both)
+5. Reference NAMESPACE data: compare costs, identify over-provisioned namespaces, flag dev/qa vs prod imbalances`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",

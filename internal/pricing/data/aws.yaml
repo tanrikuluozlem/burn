@@ -1,6 +1,6 @@
 # AWS EC2 Instance Pricing (Linux, On-Demand)
 # Source: https://aws.amazon.com/ec2/pricing/on-demand/
-# Auto-generated: 2026-04-21
+# Auto-generated: 2026-04-27
 # DO NOT EDIT MANUALLY - run 'go run scripts/update-pricing.go aws'
 
 ap-northeast-1:

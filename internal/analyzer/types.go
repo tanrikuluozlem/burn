@@ -16,6 +16,7 @@ type CostReport struct {
 	AllPods         []PodEfficiency   `json:"-"`
 	WasteAnalysis   WasteAnalysis
 	MetricsSource   string // "prometheus" or "requests"
+	Period          string `json:"period,omitempty"`
 }
 
 type NodeCost struct {

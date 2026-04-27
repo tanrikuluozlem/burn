@@ -33,7 +33,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 			Type: "header",
 			Text: &TextObject{
 				Type: "plain_text",
-				Text: "Kubernetes Cost Report",
+				Text: costReportHeader(report.Period),
 			},
 		},
 		{
@@ -242,6 +242,13 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+func costReportHeader(period string) string {
+	if period != "" {
+		return fmt.Sprintf("Kubernetes Cost Report (%s avg)", period)
+	}
+	return "Kubernetes Cost Report"
 }
 
 func formatCores(cores float64) string {

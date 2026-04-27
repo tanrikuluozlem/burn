@@ -41,6 +41,7 @@ func init() {
 	f.StringVar(&kubeconfig, "kubeconfig", "", "path to kubeconfig file")
 	f.StringVar(&kubecontext, "context", "", "kubeconfig context to use")
 	f.StringVar(&prometheusURL, "prometheus", "", "Prometheus server URL")
+	f.StringVar(&period, "period", "", "analysis period (e.g. 1h, 7d, 30d)")
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	f.BoolVar(&askSlack, "slack", false, "send answer to Slack")
 	f.StringVar(&askSlackWebhook, "slack-webhook", "", "Slack webhook URL (or set SLACK_WEBHOOK_URL)")
@@ -61,7 +62,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Collecting cluster data...")
 
-	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL)
+	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL, period)
 	if err != nil {
 		return err
 	}

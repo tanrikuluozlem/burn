@@ -20,6 +20,7 @@ type Config struct {
 	Kubecontext   string
 	Namespace     string
 	PrometheusURL string
+	Period        string
 	APIKey        string
 	SigningSecret string
 }
@@ -32,7 +33,7 @@ type Server struct {
 }
 
 func New(cfg Config) (*Server, error) {
-	coll, err := collector.New(cfg.Kubeconfig, cfg.Kubecontext, cfg.Namespace, cfg.PrometheusURL)
+	coll, err := collector.New(cfg.Kubeconfig, cfg.Kubecontext, cfg.Namespace, cfg.PrometheusURL, cfg.Period)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create collector: %w", err)
 	}
@@ -155,9 +156,14 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
 	}
 
-	summary := fmt.Sprintf("*Kubernetes Cost Report*\n"+
+	header := "*Kubernetes Cost Report*"
+	if report.Period != "" {
+		header = fmt.Sprintf("*Kubernetes Cost Report (%s avg)*", report.Period)
+	}
+	summary := fmt.Sprintf("%s\n"+
 		"💰 Monthly: $%.0f | Idle: $%.0f (%.0f%%)\n"+
 		"📦 Nodes: %d | Pods: %d",
+		header,
 		report.MonthlyCost, report.TotalIdleCost, idlePercent,
 		report.TotalNodes, report.TotalPods)
 
@@ -240,7 +246,12 @@ func (s *Server) getReport(ctx context.Context) (*analyzer.CostReport, error) {
 		return nil, fmt.Errorf("failed to get pricing: %w", err)
 	}
 
-	return analyzer.New(pp).Analyze(ctx, info)
+	report, err := analyzer.New(pp).Analyze(ctx, info)
+	if err != nil {
+		return nil, err
+	}
+	report.Period = s.config.Period
+	return report, nil
 }
 
 func (s *Server) sendSlackResponse(responseURL, text string) {

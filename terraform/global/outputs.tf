@@ -13,3 +13,7 @@ output "eks_cluster_role_arn" {
 output "github_oidc_provider_arn" {
   value = aws_iam_openid_connect_provider.github.arn
 }
+
+output "github_pricing_role_arn" {
+  value = aws_iam_role.github_actions_pricing.arn
+}

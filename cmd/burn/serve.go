@@ -19,6 +19,7 @@ var (
 	serveKubeconfig  string
 	serveKubecontext string
 	servePrometheus  string
+	servePeriod      string
 )
 
 var serveCmd = &cobra.Command{
@@ -45,6 +46,7 @@ func init() {
 	f.StringVar(&serveKubeconfig, "kubeconfig", "", "path to kubeconfig file")
 	f.StringVar(&serveKubecontext, "context", "", "kubeconfig context to use")
 	f.StringVar(&servePrometheus, "prometheus", "", "Prometheus server URL")
+	f.StringVar(&servePeriod, "period", "", "analysis period (e.g. 1h, 7d, 30d)")
 
 	rootCmd.AddCommand(serveCmd)
 }
@@ -65,6 +67,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Kubeconfig:    serveKubeconfig,
 		Kubecontext:   serveKubecontext,
 		PrometheusURL: servePrometheus,
+		Period:        servePeriod,
 		APIKey:        apiKey,
 		SigningSecret: signingSecret,
 	})

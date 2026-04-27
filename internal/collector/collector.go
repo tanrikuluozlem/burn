@@ -18,7 +18,7 @@ type Collector struct {
 	namespace  string
 }
 
-func New(kubeconfig, kubecontext, namespace, prometheusURL string) (*Collector, error) {
+func New(kubeconfig, kubecontext, namespace, prometheusURL, period string) (*Collector, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
 		loadingRules.ExplicitPath = kubeconfig
@@ -48,7 +48,7 @@ func New(kubeconfig, kubecontext, namespace, prometheusURL string) (*Collector, 
 	}
 
 	if prometheusURL != "" {
-		c.prometheus = NewPrometheusClient(prometheusURL)
+		c.prometheus = NewPrometheusClient(prometheusURL, period)
 	}
 
 	return c, nil

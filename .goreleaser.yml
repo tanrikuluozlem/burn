@@ -1,0 +1,60 @@
+version: 2
+
+project_name: burn
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - main: ./cmd/burn
+    binary: burn
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+dockers_v2:
+  - ids:
+      - burn
+    images:
+      - ghcr.io/tanrikuluozlem/burn
+    tags:
+      - "{{ .Tag }}"
+      - latest
+    dockerfile: Dockerfile
+    build_args:
+      VERSION: "{{ .Version }}"
+      COMMIT: "{{ .Commit }}"
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^build\\(deps\\):"
+
+release:
+  github:
+    owner: tanrikuluozlem
+    name: burn

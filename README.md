@@ -1,168 +1,141 @@
 # burn
 
 [![CI](https://github.com/tanrikuluozlem/burn/actions/workflows/ci.yml/badge.svg)](https://github.com/tanrikuluozlem/burn/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/tanrikuluozlem/burn)](https://github.com/tanrikuluozlem/burn/releases)
 
 Your Kubernetes cluster is burning money. Find out where.
 
-## Why
+```
+NAMESPACES
+──────────
+NAMESPACE            PODS  CPU REQ→USED  MEM REQ→USED   COST/MO
+argocd               4     2.0 → 25m     2.0Gi → 390Mi  $46
+kube-system          21    1.4 → 47m     1.6Gi → 752Mi  $34
+monitoring           11    1.6 → 73m     829Mi → 1.4Gi  $33
+app-api-qa           3     600m → 5m     768Mi → 91Mi   $15
+app-api-dev          3     600m → 4m     768Mi → 197Mi  $15
+app-api-prod         2     400m → 4m     512Mi → 17Mi   $10
+app-web-prod         2     400m → <1m    512Mi → 9Mi    $10
+Idle (unallocated)                                     $168
+─────────────────────────────────────────────────────────
+Total                                                  $350
+```
 
-Running Kubernetes in production gets expensive fast. Most teams overprovision by 40-60% without realizing it. `burn` identifies exactly which nodes are wasting money and tells you what to do about it.
+One command. No setup. No dashboard. Just answers.
 
-## Features
+## What it does
 
-- Per-node cost breakdown (hourly/monthly)
-- Waste detection for underutilized resources
-- AI recommendations via Claude (`--ai`)
-- Natural language questions (`burn ask`)
-- Slack slash commands (`burn serve`)
-- Multi-cloud pricing: AWS, Azure (spot aware)
-- Multi-cluster support (`--context`)
-- Slack integration (`--slack`)
-- Prometheus integration for real usage metrics (`--prometheus`)
+- **Namespace cost breakdown** with request vs actual usage
+- **AI recommendations** — rightsizing, spot migration, with copy-paste kubectl commands
+- **Slack bot** — `/burn` for cost reports, `/burn ask "..."` for natural language questions
+- **Time-based analysis** — `--period 7d` for weekly averages instead of point-in-time snapshots
+- **Multi-cloud pricing** — AWS, Azure, GCP with weekly auto-updates
 
 ## Install
 
 ```bash
+# Homebrew
+brew install tanrikuluozlem/burn/burn
+
+# Binary
+curl -L https://github.com/tanrikuluozlem/burn/releases/latest/download/burn_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar xz
+
+# Docker
+docker pull ghcr.io/tanrikuluozlem/burn:latest
+
+# Go
 go install github.com/tanrikuluozlem/burn/cmd/burn@latest
 ```
 
-## Quick Start
+> **macOS:** If you see a Gatekeeper warning, run: `sudo xattr -d com.apple.quarantine $(which burn)`
+
+## Quick start
 
 ```bash
-# Basic analysis
+# See where money goes — by namespace
 burn analyze
 
-# With AI recommendations
-burn analyze --ai
-
-# Ask questions about costs
-burn ask "which nodes should I convert to spot?"
-
-# Send report to Slack
-burn analyze --ai --slack
-```
-
-## Configuration
-
-Environment variables:
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `ANTHROPIC_API_KEY` | Claude API key | For `--ai`, `ask`, `serve` |
-| `SLACK_WEBHOOK_URL` | Slack webhook URL | For `--slack` |
-| `SLACK_SIGNING_SECRET` | Slack app signing secret | For `serve` |
-
-## Usage
-
-```bash
-# Analyze specific namespace
-burn analyze -n production
-
-# JSON output
-burn analyze -o json
-
-# With Prometheus metrics
+# Add Prometheus for actual usage data
 burn analyze --prometheus http://prometheus:9090
 
-# Analyze different cluster (multi-cluster)
-burn analyze --context my-prod-cluster
-burn analyze --context my-staging-cluster --ai
+# 7-day average instead of point-in-time
+burn analyze --prometheus http://prometheus:9090 --period 7d
 
-# Ask questions
-burn ask "why is this node so expensive?"
-burn ask "how can I reduce costs?"
-burn ask "what's the risk of using spot instances?"
-
-# Ask with specific cluster context
-burn ask --context my-prod-cluster "which nodes should I convert to spot?"
+# Drill into a namespace
+burn analyze --prometheus http://prometheus:9090 --namespace argocd
 ```
 
-## Slack Slash Commands
+```
+NAMESPACE: argocd (4 pods, $46/mo)
+──────────────────────────────────
+POD                              CPU REQ→USED  MEM REQ→USED   COST/MO
+argocd-application-controller-0  500m → 22m    512Mi → 335Mi  $12
+argocd-server-5bdc77f5b6-nj...   500m → 1m     512Mi → 34Mi   $12
+argocd-dex-server-8fc854b84-...  500m → <1m    512Mi → 20Mi   $12
+argocd-redis-7fd8bb554b-zqd...   500m → 2m     512Mi → 5Mi    $12
+```
 
-Run `burn serve` to enable Slack slash commands:
+## AI recommendations
 
 ```bash
-burn serve --port 8080
-
-# With specific cluster context
-burn serve --port 8080 --context my-prod-cluster
+burn analyze --prometheus http://prometheus:9090 --ai
 ```
 
-### Setup
+burn sends your cluster data to Claude and gets back specific, actionable recommendations:
+
+```
+[!!] 1. Convert All 5 Nodes to Spot
+   All 5 on-demand t3.large nodes are 71-82% idle, wasting ~$267/month.
+   Switching to Spot saves up to $228/month (~65% discount).
+   ⚠️ Only for stateless workloads (Deployments with >1 replica).
+   $ eksctl create nodegroup --cluster=CLUSTER --spot --nodes=5
+
+[!] 2. Right-size over-provisioned pods
+   argocd-dex-server requests 500m CPU but uses 0.012%.
+   $ kubectl set resources deployment argocd-dex-server -n argocd \
+     --requests=cpu=20m,memory=64Mi
+
+[!] 3. Remove idle debug pods in dev and qa
+   Two debug pods costing $9.80/month with near-zero usage.
+   $ kubectl delete pod debug-pod -n app-api-dev
+```
+
+Requires `ANTHROPIC_API_KEY` environment variable.
+
+## Slack integration
+
+Run burn as a Slack bot:
+
+```bash
+burn serve --port 8080 --prometheus http://prometheus:9090 --period 7d
+```
+
+Then in Slack:
+
+| Command | Description |
+|---------|-------------|
+| `/burn` | Namespace cost breakdown |
+| `/burn ns argocd` | Pod-level detail for a namespace |
+| `/burn ask "compare dev vs prod costs"` | AI-powered cost analysis |
+
+### Slack setup
 
 1. Create a Slack App at https://api.slack.com/apps
-2. Add a Slash Command: `/burn`
-3. Set Request URL to your server endpoint (e.g., `https://burn.example.com/slack`)
-4. Copy the Signing Secret to `SLACK_SIGNING_SECRET`
-5. Install the app to your workspace
+2. Add Slash Command: `/burn` → point to your server URL + `/slack`
+3. Set `SLACK_SIGNING_SECRET` and `ANTHROPIC_API_KEY` environment variables
+4. Expose the server (e.g., ngrok for testing, load balancer for production)
 
-### Usage in Slack
+## Deploy to Kubernetes
 
-```
-/burn analyze                              # Cluster cost summary
-/burn ask "which nodes are expensive?"     # AI-powered answers
-```
-
-### Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/slack` | POST | Slack slash command handler |
-
-## Sample Output
-
-```
-Cluster Cost Analysis - 2024-01-15T09:00:00Z
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Nodes: 3 | Pods: 47
-Hourly: $0.7200 | Monthly: $525.60
-
-NODE                  TYPE        SPOT  PODS  CPU%  MEM%  HOURLY    MONTHLY
-────                  ────        ────  ────  ────  ────  ──────    ───────
-ip-10-0-1-101         m5.large    yes   8     45%   52%   $0.0500   $36.50
-ip-10-0-1-102         m5.xlarge   no    12    68%   72%   $0.1920   $140.16
-ip-10-0-1-103         m5.large    yes   3     12%   8%    $0.0500   $36.50
-
-Waste Analysis:
-  Underutilized: 1 nodes
-  Potential savings: $25.55/mo
-
-  - ip-10-0-1-103 (12%): Very low utilization - consider smaller instance type
-```
-
-## How it Works
-
-```
-K8s API → Collector → Analyzer → Advisor (Claude) → Output
-              ↑            ↑
-         Prometheus    Pricing API
-         (recommended)  (AWS/Azure)
-```
-
-When Prometheus is configured, burn uses actual CPU/memory usage for analysis. Without it, pod resource requests are used as a fallback.
-
-## Pricing
-
-Costs are calculated using list prices from cloud provider APIs. We fetch prices from AWS Pricing API and Azure Retail Prices API weekly and embed them in the binary. This means you get accurate costs out of the box without any cloud credentials.
-
-The pricing data covers 600+ AWS instance types and 300+ Azure VM sizes across major regions. Updates happen every Monday via a GitHub Action that creates a PR when prices change.
-
-If you need real-time prices or have negotiated discounts, the cloud APIs are called at runtime when credentials are available.
-
-## Deployment
-
-Build and push to your registry:
+### Helm (daily reports)
 
 ```bash
-docker build -t your-registry/burn:latest .
-docker push your-registry/burn:latest
+helm install burn ./charts/burn \
+  --set prometheus.url=http://prometheus:9090 \
+  --set schedule="0 9 * * 1-5"
 ```
 
 ### CronJob
-
-Daily cost reports at 9 AM UTC:
 
 ```yaml
 apiVersion: batch/v1
@@ -170,45 +143,65 @@ kind: CronJob
 metadata:
   name: burn-report
 spec:
-  schedule: "0 9 * * *"
+  schedule: "0 9 * * 1-5"
   jobTemplate:
     spec:
       template:
         spec:
           containers:
           - name: burn
-            image: your-registry/burn:latest
-            args: ["analyze", "--ai", "--slack", "--prometheus", "http://prometheus:9090"]
-            envFrom:
-            - secretRef:
-                name: burn-secrets
+            image: ghcr.io/tanrikuluozlem/burn:latest
+            args:
+            - analyze
+            - --prometheus
+            - http://prometheus-server.monitoring:80
+            - --period
+            - 7d
+            - --ai
+            - --slack
+            env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: burn-secrets
+                  key: anthropic-api-key
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: burn-secrets
+                  key: slack-webhook-url
           restartPolicy: OnFailure
 ```
 
-### Helm Values
+## Configuration
 
-```yaml
-# values.yaml
-schedule: "0 9 * * *"
-prometheus:
-  url: "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
-secrets:
-  existingSecret: "burn-secrets"
+| Variable | Description | Required for |
+|----------|-------------|-------------|
+| `ANTHROPIC_API_KEY` | Claude API key | `--ai`, `ask`, `serve` |
+| `SLACK_WEBHOOK_URL` | Slack webhook URL | `--slack` |
+| `SLACK_SIGNING_SECRET` | Slack app signing secret | `serve` |
+
+## How it works
+
 ```
+kubectl → Nodes & Pods → Pricing API → Cost Report → AI Recommendations
+                ↑                                          ↓
+           Prometheus                                Slack / CLI
+           (optional)
+```
+
+Without Prometheus, burn uses pod resource requests to estimate costs. With Prometheus, it shows actual CPU and memory usage — the gap between request and usage is where your money burns.
+
+Pricing data for 600+ AWS instances and 300+ Azure VMs is embedded in the binary and updated weekly via GitHub Actions.
 
 ## Development
 
 ```bash
-# Build
-make build
-
-# Test
-make test
-
-# Lint
-make lint
+make build    # Build binary
+make test     # Run tests
+make lint     # Run linter
 ```
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
+Apache 2.0 — See [LICENSE](LICENSE) for details.

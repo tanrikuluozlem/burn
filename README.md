@@ -29,7 +29,7 @@ One command. No setup. No dashboard. Just answers.
 - **AI recommendations** — rightsizing, spot migration, with copy-paste kubectl commands
 - **Slack bot** — `/burn` for cost reports, `/burn ask "..."` for natural language questions
 - **Time-based analysis** — `--period 7d` for weekly averages instead of point-in-time snapshots
-- **Multi-cloud pricing** — AWS, Azure, GCP with weekly auto-updates
+- **Multi-cloud pricing** — AWS, Azure, GCP (AWS and Azure prices auto-updated weekly)
 
 ## Install
 
@@ -38,7 +38,8 @@ One command. No setup. No dashboard. Just answers.
 brew install tanrikuluozlem/burn/burn
 
 # Binary
-curl -L https://github.com/tanrikuluozlem/burn/releases/latest/download/burn_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar xz
+export VERSION=0.2.7  # check https://github.com/tanrikuluozlem/burn/releases for latest
+curl -L "https://github.com/tanrikuluozlem/burn/releases/download/v${VERSION}/burn_${VERSION}_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz
 
 # Docker
 docker pull ghcr.io/tanrikuluozlem/burn:latest
@@ -130,7 +131,8 @@ Then in Slack:
 ### Helm (daily reports)
 
 ```bash
-helm install burn ./charts/burn \
+git clone https://github.com/tanrikuluozlem/burn.git
+helm install burn ./burn/charts/burn \
   --set prometheus.url=http://prometheus:9090 \
   --set schedule="0 9 * * 1-5"
 ```

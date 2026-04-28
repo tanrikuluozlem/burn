@@ -41,6 +41,13 @@ changelog:
       - "^chore:"
       - "^build\\(deps\\):"
 
+homebrew_casks:
+  - repository:
+      owner: tanrikuluozlem
+      name: homebrew-burn
+    homepage: https://github.com/tanrikuluozlem/burn
+    description: Kubernetes FinOps CLI — analyze costs, find waste, get AI recommendations
+
 release:
   github:
     owner: tanrikuluozlem

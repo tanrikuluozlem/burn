@@ -44,6 +44,10 @@ curl -L "https://github.com/tanrikuluozlem/burn/releases/download/v${VERSION}/bu
 # Docker
 docker pull ghcr.io/tanrikuluozlem/burn:latest
 
+# Helm (Kubernetes)
+git clone https://github.com/tanrikuluozlem/burn.git
+helm install burn ./burn/charts/burn
+
 # Go
 go install github.com/tanrikuluozlem/burn/cmd/burn@latest
 ```

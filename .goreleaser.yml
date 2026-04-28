@@ -24,19 +24,6 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
-dockers_v2:
-  - ids:
-      - burn
-    images:
-      - ghcr.io/tanrikuluozlem/burn
-    tags:
-      - "{{ .Tag }}"
-      - latest
-    dockerfile: Dockerfile
-    build_args:
-      VERSION: "{{ .Version }}"
-      COMMIT: "{{ .Commit }}"
-
 archives:
   - formats:
       - tar.gz

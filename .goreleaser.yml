@@ -45,6 +45,7 @@ homebrew_casks:
   - repository:
       owner: tanrikuluozlem
       name: homebrew-burn
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/tanrikuluozlem/burn
     description: Kubernetes FinOps CLI — analyze costs, find waste, get AI recommendations
 

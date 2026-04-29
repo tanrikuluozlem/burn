@@ -123,6 +123,33 @@ Then in Slack:
 | `/burn ns argocd` | Pod-level detail for a namespace |
 | `/burn ask "compare dev vs prod costs"` | AI-powered cost analysis |
 
+Example response for `/burn ask "compare argocd vs kube-system costs"`:
+
+```
+ArgoCD vs kube-system Cost Comparison
+
+| Metric           | argocd   | kube-system |
+|------------------|----------|-------------|
+| Monthly Cost     | $46.45   | $33.80      |
+| Pod Count        | 4        | 21          |
+| CPU Requested    | 2,000m   | 1,420m      |
+| CPU Actual Usage | ~28m     | ~47m        |
+| Mem Requested    | 2,048 MB | 1,620 MB    |
+| Mem Actual Usage | 415 MB   | 752 MB      |
+
+ArgoCD costs 37% more than kube-system despite having only 4 pods vs 21.
+
+ArgoCD is extremely wasteful:
+- argocd-dex-server — requests 500m CPU, uses <1m (0.02% efficiency)
+- argocd-server — requests 500m CPU, uses ~1.4m (0.27% efficiency)
+
+Recommended:
+$ kubectl set resources deployment argocd-dex-server -n argocd \
+    --requests=cpu=10m,memory=64Mi --limits=cpu=50m,memory=128Mi
+$ kubectl set resources deployment argocd-server -n argocd \
+    --requests=cpu=50m,memory=128Mi --limits=cpu=200m,memory=256Mi
+```
+
 ### Slack setup
 
 1. Create a Slack App at https://api.slack.com/apps

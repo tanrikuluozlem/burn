@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tanrikuluozlem/burn/internal/collector"
+	"github.com/tanrikuluozlem/burn/internal/pricing"
 )
 
 func floatEquals(a, b float64) bool {
@@ -22,6 +23,15 @@ func (m *mockPricing) GetHourlyPrice(context.Context, string, string, bool) (flo
 
 func (m *mockPricing) GetHourlyPriceForNode(_ context.Context, _ collector.NodeInfo) (float64, error) {
 	return m.price, nil
+}
+
+func (m *mockPricing) GetNodePricing(_ context.Context, node collector.NodeInfo) (*pricing.NodePricing, error) {
+	cpuPerCore, ramPerGiB := pricing.SplitNodeCost(m.price, node.CPUAllocatable, node.MemAllocatable)
+	return &pricing.NodePricing{
+		HourlyTotal:    m.price,
+		CPUCostPerCore: cpuPerCore,
+		RAMCostPerGiB:  ramPerGiB,
+	}, nil
 }
 
 func TestResourcePercentage(t *testing.T) {
@@ -95,15 +105,25 @@ func TestAnalyzeWithPrometheus(t *testing.T) {
 
 	info := &collector.ClusterInfo{
 		TotalNodes: 1,
-		TotalPods:  2,
+		TotalPods:  1,
 		Nodes: []collector.NodeInfo{{
 			Name:           "node-1",
 			InstanceType:   "t3.medium",
 			Region:         "us-east-1",
 			CPUAllocatable: 4000,                   // 4 cores in millicores
 			MemAllocatable: 8 * 1024 * 1024 * 1024, // 8GB
-			CPUUsage:       2.0,                    // 2 cores from Prometheus
-			MemoryUsage:    4 * 1024 * 1024 * 1024, // 4GB from Prometheus
+			CPUUsage:       2.0,                     // 2 cores from Prometheus
+			MemoryUsage:    4 * 1024 * 1024 * 1024,  // 4GB from Prometheus
+			Pods: []collector.PodInfo{
+				{
+					Name:          "app",
+					Namespace:     "default",
+					CPURequest:    2000,                    // 2 cores
+					MemoryRequest: 4 * 1024 * 1024 * 1024, // 4GB
+					CPUUsage:      2.0,
+					MemoryUsage:   4 * 1024 * 1024 * 1024,
+				},
+			},
 		}},
 	}
 
@@ -114,16 +134,15 @@ func TestAnalyzeWithPrometheus(t *testing.T) {
 	if report.MetricsSource != "prometheus" {
 		t.Errorf("MetricsSource = %s, expected prometheus", report.MetricsSource)
 	}
-	// CPU: 2.0 / 4.0 = 0.5 (50% used)
-	// Mem: 4GB / 8GB = 0.5 (50% used)
-	// Used = max(0.5, 0.5) = 0.5
-	// Idle = 1 - 0.5 = 0.5 (50%)
-	if report.Nodes[0].IdlePercent != 0.5 {
-		t.Errorf("IdlePercent = %v, expected 0.5", report.Nodes[0].IdlePercent)
+
+	node := report.Nodes[0]
+
+	// Pod uses 50% CPU and 50% RAM → 50% idle
+	if !floatEquals(node.IdlePercent, 0.5) {
+		t.Errorf("IdlePercent = %v, expected ~0.5", node.IdlePercent)
 	}
-	// Idle cost = 0.10 * 0.5 = 0.05 hourly
-	if report.Nodes[0].IdleCostHourly != 0.05 {
-		t.Errorf("IdleCostHourly = %v, expected 0.05", report.Nodes[0].IdleCostHourly)
+	if !floatEquals(node.IdleCostHourly, 0.05) {
+		t.Errorf("IdleCostHourly = %v, expected ~0.05", node.IdleCostHourly)
 	}
 }
 
@@ -164,18 +183,13 @@ func TestAnalyzeIdleCost(t *testing.T) {
 		t.Errorf("MemRequested = %v, expected %v", node.MemRequested, expectedMemRequested)
 	}
 
-	// Without Prometheus, idle is based on requests
-	// Used = max(0.25, 0.25) = 0.25
-	// Idle = 1 - 0.25 = 0.75 (75%)
-	expectedIdle := 0.75
-	if node.IdlePercent != expectedIdle {
-		t.Errorf("IdlePercent = %v, expected %v", node.IdlePercent, expectedIdle)
+	// Pod requests 25% of each resource → 75% idle
+	if !floatEquals(node.IdlePercent, 0.75) {
+		t.Errorf("IdlePercent = %v, expected ~0.75", node.IdlePercent)
 	}
 
-	// Idle cost = 0.10 * 0.75 = 0.075 hourly
-	expectedIdleCostHourly := 0.075
-	if !floatEquals(node.IdleCostHourly, expectedIdleCostHourly) {
-		t.Errorf("IdleCostHourly = %v, expected %v", node.IdleCostHourly, expectedIdleCostHourly)
+	if !floatEquals(node.IdleCostHourly, 0.075) {
+		t.Errorf("IdleCostHourly = %v, expected ~0.075", node.IdleCostHourly)
 	}
 }
 
@@ -287,10 +301,9 @@ func TestAnalyzeWithoutPrometheus(t *testing.T) {
 		t.Errorf("CPURequested = %v, expected 0.5", report.Nodes[0].CPURequested)
 	}
 
-	// Idle based on requests: 1 - max(0.5, 0.5) = 0.5
-	expectedIdle := 0.5
-	if report.Nodes[0].IdlePercent != expectedIdle {
-		t.Errorf("IdlePercent = %v, expected %v", report.Nodes[0].IdlePercent, expectedIdle)
+	// Pod requests 50% of each resource → 50% idle
+	if !floatEquals(report.Nodes[0].IdlePercent, 0.5) {
+		t.Errorf("IdlePercent = %v, expected ~0.5", report.Nodes[0].IdlePercent)
 	}
 }
 
@@ -357,5 +370,147 @@ func TestAnalyzePopulatesNamespaces(t *testing.T) {
 
 	if len(report.AllPods) != 2 {
 		t.Fatalf("expected 2 AllPods, got %d", len(report.AllPods))
+	}
+}
+
+func TestMaxRequestUsage(t *testing.T) {
+	// When pod usage exceeds request (burst), cost should be based on usage
+	a := New(&mockPricing{price: 0.10})
+
+	info := &collector.ClusterInfo{
+		TotalNodes: 1,
+		TotalPods:  1,
+		Nodes: []collector.NodeInfo{{
+			Name:           "node-1",
+			InstanceType:   "t3.large",
+			Region:         "us-east-1",
+			CPUAllocatable: 4000,
+			MemAllocatable: 8 * 1024 * 1024 * 1024,
+			CPUUsage:       3.0, // Prometheus says node uses 3 cores
+			MemoryUsage:    6 * 1024 * 1024 * 1024,
+			Pods: []collector.PodInfo{
+				{
+					Name:          "burst-app",
+					Namespace:     "default",
+					CPURequest:    1000,                    // requests 1 core
+					MemoryRequest: 2 * 1024 * 1024 * 1024, // requests 2 GiB
+					CPUUsage:      3.0,                     // actually uses 3 cores (burst)
+					MemoryUsage:   6 * 1024 * 1024 * 1024,  // actually uses 6 GiB (burst)
+				},
+			},
+		}},
+	}
+
+	report, err := a.Analyze(context.Background(), info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pod := report.AllPods[0]
+
+	// max(request, usage) applied: cost based on 3 cores, 6 GiB
+	// Without max(req, usage), cost would be based on 1 core, 2 GiB
+	// Cost with burst should be ~3x CPU + 3x RAM compared to request-only
+
+	// SplitNodeCost(0.10, 4000, 8GiB)
+	cpuPerCore, ramPerGiB := pricing.SplitNodeCost(0.10, 4000, 8*1024*1024*1024)
+	expectedCPUCost := 3.0 * cpuPerCore * hoursPerMonth
+	expectedRAMCost := 6.0 * ramPerGiB * hoursPerMonth
+
+	if !floatEquals(pod.CPUCost, expectedCPUCost) {
+		t.Errorf("CPUCost = %v, expected %v (should use usage, not request)", pod.CPUCost, expectedCPUCost)
+	}
+	if !floatEquals(pod.RAMCost, expectedRAMCost) {
+		t.Errorf("RAMCost = %v, expected %v (should use usage, not request)", pod.RAMCost, expectedRAMCost)
+	}
+	if !floatEquals(pod.MonthlyCost, pod.CPUCost+pod.RAMCost) {
+		t.Errorf("MonthlyCost = %v, expected CPUCost+RAMCost = %v", pod.MonthlyCost, pod.CPUCost+pod.RAMCost)
+	}
+}
+
+func TestPerResourceIdle(t *testing.T) {
+	a := New(&mockPricing{price: 0.10})
+
+	// Node: 4 CPU, 8 GiB
+	// Pod: requests 1 CPU (25%), 6 GiB (75%)
+	// CPU idle should be high (75%), RAM idle should be low (25%)
+	info := &collector.ClusterInfo{
+		TotalNodes: 1,
+		TotalPods:  1,
+		Nodes: []collector.NodeInfo{{
+			Name:           "node-1",
+			InstanceType:   "m5.xlarge",
+			Region:         "us-east-1",
+			CPUAllocatable: 4000,
+			MemAllocatable: 8 * 1024 * 1024 * 1024,
+			Pods: []collector.PodInfo{
+				{
+					Name:          "mem-heavy",
+					Namespace:     "default",
+					CPURequest:    1000,                    // 1 core (25% of 4)
+					MemoryRequest: 6 * 1024 * 1024 * 1024, // 6 GiB (75% of 8)
+				},
+			},
+		}},
+	}
+
+	report, err := a.Analyze(context.Background(), info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node := report.Nodes[0]
+
+	// CPU idle should be larger than RAM idle (more CPU is unallocated)
+	if node.CPUIdleCost <= node.RAMIdleCost {
+		t.Errorf("CPUIdleCost (%v) should be > RAMIdleCost (%v) for CPU-heavy idle node",
+			node.CPUIdleCost, node.RAMIdleCost)
+	}
+
+	// Total idle = CPUIdleCost + RAMIdleCost
+	if !floatEquals(node.IdleCostMonthly, node.CPUIdleCost+node.RAMIdleCost) {
+		t.Errorf("IdleCostMonthly (%v) != CPUIdleCost+RAMIdleCost (%v)",
+			node.IdleCostMonthly, node.CPUIdleCost+node.RAMIdleCost)
+	}
+}
+
+func TestCPUCostPlusRAMCostEqualsMonthlyCost(t *testing.T) {
+	a := New(&mockPricing{price: 0.192}) // m5.xlarge price
+
+	info := &collector.ClusterInfo{
+		TotalNodes: 1,
+		TotalPods:  2,
+		Nodes: []collector.NodeInfo{{
+			Name:           "node-1",
+			InstanceType:   "m5.xlarge",
+			Region:         "us-east-1",
+			CPUAllocatable: 4000,
+			MemAllocatable: 16 * 1024 * 1024 * 1024,
+			Pods: []collector.PodInfo{
+				{Name: "web", Namespace: "prod", CPURequest: 1000, MemoryRequest: 4 * 1024 * 1024 * 1024},
+				{Name: "api", Namespace: "prod", CPURequest: 2000, MemoryRequest: 8 * 1024 * 1024 * 1024},
+			},
+		}},
+	}
+
+	report, err := a.Analyze(context.Background(), info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// For every pod: MonthlyCost = CPUCost + RAMCost
+	for _, pod := range report.AllPods {
+		if !floatEquals(pod.MonthlyCost, pod.CPUCost+pod.RAMCost) {
+			t.Errorf("pod %s: MonthlyCost=%v != CPUCost(%v)+RAMCost(%v)",
+				pod.Name, pod.MonthlyCost, pod.CPUCost, pod.RAMCost)
+		}
+	}
+
+	// For every namespace: MonthlyCost = CPUCost + RAMCost
+	for _, ns := range report.Namespaces {
+		if !floatEquals(ns.MonthlyCost, ns.CPUCost+ns.RAMCost) {
+			t.Errorf("ns %s: MonthlyCost=%v != CPUCost(%v)+RAMCost(%v)",
+				ns.Name, ns.MonthlyCost, ns.CPUCost, ns.RAMCost)
+		}
 	}
 }

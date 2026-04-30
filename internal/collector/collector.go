@@ -150,6 +150,31 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 			}
 		}
 	}
+
+	// Fetch p95 metrics when a period is configured
+	if c.prometheus.period != "" {
+		podCPUP95, err := c.prometheus.GetPodCPUUsageP95(ctx)
+		if err != nil {
+			log.Printf("warning: failed to get pod CPU p95 metrics: %v", err)
+		}
+		podMemP95, err := c.prometheus.GetPodMemoryUsageP95(ctx)
+		if err != nil {
+			log.Printf("warning: failed to get pod memory p95 metrics: %v", err)
+		}
+
+		for i := range nodes {
+			for j := range nodes[i].Pods {
+				pod := &nodes[i].Pods[j]
+				key := pod.Namespace + "/" + pod.Name
+				if cpu, ok := podCPUP95[key]; ok {
+					pod.CPUP95Usage = cpu
+				}
+				if mem, ok := podMemP95[key]; ok {
+					pod.MemoryP95Usage = mem
+				}
+			}
+		}
+	}
 }
 
 func parseNode(node corev1.Node) NodeInfo {

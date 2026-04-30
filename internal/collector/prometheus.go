@@ -170,6 +170,59 @@ func (p *PrometheusClient) GetPodMemoryUsage(ctx context.Context) (map[string]in
 	return usage, nil
 }
 
+func (p *PrometheusClient) wrapQuantileQuery(query string, quantile float64) string {
+	if p.period == "" {
+		return query
+	}
+	return fmt.Sprintf("quantile_over_time(%g, %s[%s:5m])", quantile, query, p.period)
+}
+
+func (p *PrometheusClient) GetPodCPUUsageP95(ctx context.Context) (map[string]float64, error) {
+	baseQuery := `sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) by (pod, namespace)`
+	query := p.wrapQuantileQuery(baseQuery, 0.95)
+	results, err := p.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	usage := make(map[string]float64)
+	for _, r := range results {
+		pod := r.Metric["pod"]
+		ns := r.Metric["namespace"]
+		if pod == "" || ns == "" {
+			continue
+		}
+		key := ns + "/" + pod
+		if val, err := parseValue(r.Value); err == nil {
+			usage[key] = val
+		}
+	}
+	return usage, nil
+}
+
+func (p *PrometheusClient) GetPodMemoryUsageP95(ctx context.Context) (map[string]int64, error) {
+	baseQuery := `sum(container_memory_working_set_bytes{container!="",container!="POD"}) by (pod, namespace)`
+	query := p.wrapQuantileQuery(baseQuery, 0.95)
+	results, err := p.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	usage := make(map[string]int64)
+	for _, r := range results {
+		pod := r.Metric["pod"]
+		ns := r.Metric["namespace"]
+		if pod == "" || ns == "" {
+			continue
+		}
+		key := ns + "/" + pod
+		if val, err := parseValue(r.Value); err == nil {
+			usage[key] = int64(val)
+		}
+	}
+	return usage, nil
+}
+
 func parseValue(v []any) (float64, error) {
 	if len(v) < 2 {
 		return 0, fmt.Errorf("invalid value")

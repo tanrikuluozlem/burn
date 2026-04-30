@@ -28,14 +28,16 @@ type NodeInfo struct {
 }
 
 type PodInfo struct {
-	Name          string
-	Namespace     string
-	CPURequest    int64
-	CPULimit      int64
-	MemoryRequest int64
-	MemoryLimit   int64
-	CPUUsage      float64
-	MemoryUsage   int64
+	Name           string
+	Namespace      string
+	CPURequest     int64
+	CPULimit       int64
+	MemoryRequest  int64
+	MemoryLimit    int64
+	CPUUsage       float64
+	MemoryUsage    int64
+	CPUP95Usage    float64 // p95 CPU usage in cores (over analysis period)
+	MemoryP95Usage int64   // p95 memory usage in bytes (over analysis period)
 }
 
 type ClusterInfo struct {

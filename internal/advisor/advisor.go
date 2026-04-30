@@ -37,7 +37,7 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Re
 
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:       a.model,
-		MaxTokens:   2048,
+		MaxTokens:   4096,
 		Temperature: anthropic.Float(0), // Deterministic output
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
@@ -148,7 +148,7 @@ var recommendationSchema = anthropic.ToolInputSchemaParam{
 func buildPrompt(report *analyzer.CostReport) string {
 	data, _ := json.MarshalIndent(report, "", "  ")
 
-	savings := CalculateSavings(report)
+	savings := CalculateSavings(report, DefaultSavingsConfig())
 
 	savingsInfo := "\n\n---\nPRE-CALCULATED SAVINGS (use these exact values, pick ONE):\n"
 

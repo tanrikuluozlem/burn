@@ -103,7 +103,8 @@ RULES:
 2. Use REAL node names from data
 3. Only ONE recommendation gets estimated_savings
 4. Pick ONE strategy: spot OR consolidation (not both)
-5. Reference NAMESPACE data: compare costs, identify over-provisioned namespaces, flag dev/qa vs prod imbalances`
+5. Reference NAMESPACE data: compare costs, identify over-provisioned namespaces, flag dev/qa vs prod imbalances
+6. Do NOT calculate percentages or dollar values yourself. Only use numbers that appear in the data. If a value is not in the data, do not invent it.`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",
@@ -148,9 +149,36 @@ var recommendationSchema = anthropic.ToolInputSchemaParam{
 func buildPrompt(report *analyzer.CostReport) string {
 	data, _ := json.MarshalIndent(report, "", "  ")
 
+	// Pre-calculated node summary (AI must not calculate these)
+	nodeSummary := "\n\n---\nNODE SUMMARY (use these exact values):\n"
+	for _, n := range report.Nodes {
+		spot := "on-demand"
+		if n.IsSpot {
+			spot = "spot"
+		}
+		nodeSummary += fmt.Sprintf("• %s — %s %s — $%.0f/mo — %.0f%% CPU requested — %.0f%% MEM requested — %.0f%% idle — $%.0f/mo idle cost\n",
+			n.Name, n.InstanceType, spot, n.MonthlyPrice,
+			n.CPURequested*100, n.MemRequested*100, n.IdlePercent*100, n.IdleCostMonthly)
+	}
+
+	// Pre-calculated namespace summary
+	nsSummary := "\nNAMESPACE SUMMARY (use these exact values):\n"
+	for _, ns := range report.Namespaces {
+		nsSummary += fmt.Sprintf("• %s — %d pods — $%.0f/mo (CPU: $%.0f, RAM: $%.0f)\n",
+			ns.Name, ns.PodCount, ns.MonthlyCost, ns.CPUCost, ns.RAMCost)
+	}
+
+	// Pre-calculated top inefficient pods
+	podSummary := "\nTOP INEFFICIENT PODS (use these exact values):\n"
+	for _, p := range report.InefficientPods {
+		podSummary += fmt.Sprintf("• %s/%s — CPU: %dm req, %.2fm used (%.1f%% eff) — MEM: %.0f%% eff — $%.1f/mo\n",
+			p.Namespace, p.Name, p.CPURequest, p.CPUUsage*1000, p.CPUEfficiency*100,
+			p.MemEfficiency*100, p.MonthlyCost)
+	}
+
 	savings := CalculateSavings(report, DefaultSavingsConfig())
 
-	savingsInfo := "\n\n---\nPRE-CALCULATED SAVINGS (use these exact values, pick ONE):\n"
+	savingsInfo := "\nPRE-CALCULATED SAVINGS (use these exact values, pick ONE):\n"
 
 	if savings.SpotConversion != nil && savings.SpotConversion.Applicable {
 		savingsInfo += fmt.Sprintf("• Spot: up to $%.0f/month (only stateless workloads)\n", savings.SpotConversion.MonthlySavings)
@@ -166,7 +194,7 @@ func buildPrompt(report *analyzer.CostReport) string {
 
 	savingsInfo += fmt.Sprintf("\nUse $%.0f for estimated_savings (best option).\n", savings.TotalSavings())
 
-	return fmt.Sprintf("Cluster data:\n%s%s", string(data), savingsInfo)
+	return fmt.Sprintf("Cluster data:\n%s%s%s%s%s", string(data), nodeSummary, nsSummary, podSummary, savingsInfo)
 }
 
 type toolInput struct {

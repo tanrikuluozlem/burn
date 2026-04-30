@@ -7,6 +7,8 @@ import (
 )
 
 func TestCalculateSpotSavings(t *testing.T) {
+	discountRate := 0.79
+
 	tests := []struct {
 		name           string
 		nodes          []analyzer.NodeCost
@@ -16,26 +18,26 @@ func TestCalculateSpotSavings(t *testing.T) {
 		{
 			name: "on-demand nodes with high idle - should recommend spot",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60}, // 40% used
-				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.50}, // 50% used
+				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60},
+				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.50},
 			},
 			wantApplicable: true,
-			wantSavings:    130, // (100+100) * 0.65
+			wantSavings:    158, // (100+100) * 0.79
 		},
 		{
-			name: "on-demand nodes with low idle - still applicable (spot is workload-dependent)",
+			name: "on-demand nodes with low idle - still applicable",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.15}, // 85% used
-				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.10}, // 90% used
+				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.15},
+				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.10},
 			},
 			wantApplicable: true,
-			wantSavings:    130,
+			wantSavings:    158,
 		},
 		{
 			name: "all spot nodes - not applicable",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: true, MonthlyPrice: 35, IdlePercent: 0.60},
-				{Name: "node-2", IsSpot: true, MonthlyPrice: 35, IdlePercent: 0.50},
+				{Name: "node-1", IsSpot: true, MonthlyPrice: 21, IdlePercent: 0.60},
+				{Name: "node-2", IsSpot: true, MonthlyPrice: 21, IdlePercent: 0.50},
 			},
 			wantApplicable: false,
 			wantSavings:    0,
@@ -43,18 +45,18 @@ func TestCalculateSpotSavings(t *testing.T) {
 		{
 			name: "mixed spot and on-demand",
 			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60}, // 40% used
-				{Name: "node-2", IsSpot: true, MonthlyPrice: 35, IdlePercent: 0.50},
+				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60},
+				{Name: "node-2", IsSpot: true, MonthlyPrice: 21, IdlePercent: 0.50},
 			},
 			wantApplicable: true,
-			wantSavings:    65, // only on-demand: 100 * 0.65
+			wantSavings:    79, // only on-demand: 100 * 0.79
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			report := &analyzer.CostReport{Nodes: tt.nodes}
-			result := calculateSpotSavings(report)
+			result := calculateSpotSavings(report, discountRate)
 
 			if result.Applicable != tt.wantApplicable {
 				t.Errorf("Applicable = %v, want %v", result.Applicable, tt.wantApplicable)
@@ -189,7 +191,7 @@ func TestCalculateRightSizingSavings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			report := &analyzer.CostReport{Nodes: tt.nodes}
+			report := &analyzer.CostReport{Nodes: tt.nodes, MetricsSource: "requests"}
 			result := calculateRightSizingSavings(report)
 
 			if result.Applicable != tt.wantApplicable {

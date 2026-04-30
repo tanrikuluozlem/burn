@@ -37,52 +37,96 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 		cloudName = "gcp"
 	}
 
-	// Try embedded DB first (fast, no API call)
+	// Spot: cloud API first, then embedded DB fallback
+	if node.IsSpot {
+		switch node.CloudProvider {
+		case collector.CloudAWS:
+			if p.aws != nil {
+				if price, err := p.aws.GetHourlyPrice(ctx, node.InstanceType, node.Region, true); err == nil {
+					return price, nil
+				}
+			}
+		case collector.CloudAzure:
+			if p.azure != nil {
+				if price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, true); err == nil {
+					return price, nil
+				}
+			}
+		}
+		// Fallback: on-demand price * 0.21
+		if cloudName != "" {
+			if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
+				return price * 0.21, nil
+			}
+		}
+		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, true)
+	}
+
+	// On-demand: embedded DB → cloud API → static fallback
 	if cloudName != "" {
 		if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
-			if node.IsSpot {
-				return price * 0.35, nil // spot ~65% discount
-			}
 			return price, nil
 		}
 	}
 
-	// Fall back to cloud API
+	// Cloud API
 	switch node.CloudProvider {
 	case collector.CloudAWS:
 		if p.aws != nil {
-			if price, err := p.aws.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot); err == nil {
+			if price, err := p.aws.GetHourlyPrice(ctx, node.InstanceType, node.Region, false); err == nil {
 				return price, nil
 			}
 		}
-
 	case collector.CloudAzure:
 		if p.azure != nil {
-			if price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot); err == nil {
+			if price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, false); err == nil {
 				return price, nil
 			}
 		}
 	}
 
-	// Last resort: static fallback with estimation
-	return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
+	// Static fallback
+	return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, false)
 }
 
 func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
-	// Try embedded DB (AWS first since it's most common)
-	if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
-		if isSpot {
-			return price * 0.35, nil
+	if isSpot {
+		// Spot: cloud API first
+		if p.aws != nil {
+			if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true); err == nil {
+				return price, nil
+			}
 		}
+		// Fallback: on-demand * 0.21
+		if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
+			return price * 0.21, nil
+		}
+		return p.fallback.GetHourlyPrice(ctx, instanceType, region, true)
+	}
+
+	// On-demand: try embedded DB first
+	if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
 		return price, nil
 	}
 
-	// Try cloud APIs
 	if p.aws != nil {
-		if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, isSpot); err == nil {
+		if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false); err == nil {
 			return price, nil
 		}
 	}
 
-	return p.fallback.GetHourlyPrice(ctx, instanceType, region, isSpot)
+	return p.fallback.GetHourlyPrice(ctx, instanceType, region, false)
+}
+
+func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collector.NodeInfo) (*NodePricing, error) {
+	hourly, err := p.GetHourlyPriceForNode(ctx, node)
+	if err != nil {
+		return nil, err
+	}
+	cpuPerCore, ramPerGiB := SplitNodeCost(hourly, node.CPUAllocatable, node.MemAllocatable)
+	return &NodePricing{
+		HourlyTotal:    hourly,
+		CPUCostPerCore: cpuPerCore,
+		RAMCostPerGiB:  ramPerGiB,
+	}, nil
 }

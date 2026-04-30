@@ -9,14 +9,14 @@ Your Kubernetes cluster is burning money. Find out where.
 NAMESPACES
 ──────────
 NAMESPACE            PODS  CPU REQ→USED  MEM REQ→USED   COST/MO
-argocd               4     2.0 → 25m     2.0Gi → 390Mi  $46
-kube-system          21    1.4 → 47m     1.6Gi → 752Mi  $34
-monitoring           11    1.6 → 73m     829Mi → 1.4Gi  $33
-app-api-qa           3     600m → 5m     768Mi → 91Mi   $15
-app-api-dev          3     600m → 4m     768Mi → 197Mi  $15
-app-api-prod         2     400m → 4m     512Mi → 17Mi   $10
-app-web-prod         2     400m → <1m    512Mi → 9Mi    $10
-Idle (unallocated)                                     $168
+argocd               4     2.0 → 30m     2.0Gi → 393Mi  $56
+amazon-cloudwatch    11    1.6 → 82m     829Mi → 1.3Gi  $44
+kube-system          21    1.4 → 52m     1.6Gi → 757Mi  $41
+app-api-qa           3     600m → 5m     768Mi → 91Mi   $17
+app-api-dev          3     600m → 4m     768Mi → 197Mi  $17
+app-api-prod         2     400m → 4m     512Mi → 17Mi   $11
+app-web-prod         2     400m → <1m    512Mi → 9Mi    $11
+Idle (unallocated)                                     $117
 ─────────────────────────────────────────────────────────
 Total                                                  $350
 ```
@@ -71,13 +71,13 @@ burn analyze --prometheus http://prometheus:9090 --namespace argocd
 ```
 
 ```
-NAMESPACE: argocd (4 pods, $46/mo)
+NAMESPACE: argocd (4 pods, $56/mo)
 ──────────────────────────────────
-POD                              CPU REQ→USED  MEM REQ→USED   COST/MO
-argocd-application-controller-0  500m → 22m    512Mi → 335Mi  $12
-argocd-server-5bdc77f5b6-nj...   500m → 1m     512Mi → 34Mi   $12
-argocd-dex-server-8fc854b84-...  500m → <1m    512Mi → 20Mi   $12
-argocd-redis-7fd8bb554b-zqd...   500m → 2m     512Mi → 5Mi    $12
+POD                                CPU REQ→USED  MEM REQ→USED   COST/MO
+argocd-application-controller-0    500m → 23m    512Mi → 346Mi  $14
+argocd-server-5bdc77f5b6-njxc6     500m → 1m     512Mi → 34Mi   $14
+argocd-dex-server-8fc854b84-pxqh5  500m → <1m    512Mi → 20Mi   $14
+argocd-redis-7fd8bb554b-zqdcz      500m → 2m     512Mi → 5Mi    $14
 ```
 
 ## AI recommendations
@@ -90,19 +90,19 @@ burn sends your cluster data to Claude and gets back specific, actionable recomm
 
 ```
 [!!] 1. Convert All 5 Nodes to Spot
-   All 5 on-demand t3.large nodes are 71-82% idle, wasting ~$267/month.
-   Switching to Spot saves up to $228/month (~65% discount).
+   All 5 on-demand t3.large nodes have 26-41% idle cost, wasting $117/month.
+   Switching to Spot saves up to $277/month (~79% discount).
    ⚠️ Only for stateless workloads (Deployments with >1 replica).
-   $ eksctl create nodegroup --cluster=CLUSTER --spot --nodes=5
+   $ eksctl create nodegroup --cluster=CLUSTER --region=eu-central-1 --spot --nodes=5
 
-[!] 2. Right-size over-provisioned pods
-   argocd-dex-server requests 500m CPU but uses 0.012%.
+[!!] 2. Right-size over-provisioned pods
+   argocd-dex-server requests 500m CPU but uses 0.12m (0.0% efficiency).
    $ kubectl set resources deployment argocd-dex-server -n argocd \
-     --requests=cpu=20m,memory=64Mi
+     --requests=cpu=10m,memory=64Mi
 
 [!] 3. Remove idle debug pods in dev and qa
-   Two debug pods costing $9.80/month with near-zero usage.
-   $ kubectl delete pod debug-pod -n app-api-dev
+   Two rds-debug pods costing $5.7/month each with near-zero usage.
+   $ kubectl delete pod rds-debug -n app-api-dev
 ```
 
 Requires `ANTHROPIC_API_KEY` environment variable.
@@ -130,18 +130,18 @@ ArgoCD vs kube-system Cost Comparison
 
 | Metric           | argocd   | kube-system |
 |------------------|----------|-------------|
-| Monthly Cost     | $46.45   | $33.80      |
+| Monthly Cost     | $55.64   | $41.30      |
 | Pod Count        | 4        | 21          |
 | CPU Requested    | 2,000m   | 1,420m      |
-| CPU Actual Usage | ~28m     | ~47m        |
-| Mem Requested    | 2,048 MB | 1,620 MB    |
-| Mem Actual Usage | 415 MB   | 752 MB      |
+| CPU Actual Usage | ~30m     | ~52m        |
+| Mem Requested    | 2.0 GiB  | 1.6 GiB     |
+| Mem Actual Usage | 393 MiB  | 757 MiB     |
 
-ArgoCD costs 37% more than kube-system despite having only 4 pods vs 21.
+ArgoCD costs 35% more than kube-system despite having only 4 pods vs 21.
 
 ArgoCD is extremely wasteful:
-- argocd-dex-server — requests 500m CPU, uses <1m (0.02% efficiency)
-- argocd-server — requests 500m CPU, uses ~1.4m (0.27% efficiency)
+- argocd-dex-server — requests 500m CPU, uses <1m (0.0% efficiency)
+- argocd-server — requests 500m CPU, uses ~1m (0.3% efficiency)
 
 Recommended:
 $ kubectl set resources deployment argocd-dex-server -n argocd \

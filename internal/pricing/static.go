@@ -30,9 +30,8 @@ func (p *StaticProvider) GetHourlyPrice(_ context.Context, instanceType, region 
 	}
 
 	if isSpot {
-		// Spot instances typically cost 30-50% of on-demand price (50-70% discount)
-		// Using 0.35 as conservative estimate (65% discount)
-		return price * 0.35, nil
+		// Spot discount (~79% off on-demand)
+		return price * 0.21, nil
 	}
 	return price, nil
 }
@@ -67,6 +66,19 @@ func estimatePrice(instanceType string) float64 {
 
 func (p *StaticProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
 	return p.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
+}
+
+func (p *StaticProvider) GetNodePricing(ctx context.Context, node collector.NodeInfo) (*NodePricing, error) {
+	hourly, err := p.GetHourlyPriceForNode(ctx, node)
+	if err != nil {
+		return nil, err
+	}
+	cpuPerCore, ramPerGiB := SplitNodeCost(hourly, node.CPUAllocatable, node.MemAllocatable)
+	return &NodePricing{
+		HourlyTotal:    hourly,
+		CPUCostPerCore: cpuPerCore,
+		RAMCostPerGiB:  ramPerGiB,
+	}, nil
 }
 
 func defaultPrices() map[string]map[string]float64 {

@@ -28,6 +28,19 @@ app-web-prod         2     400m → <1m    512Mi → 9Mi    $11
 Idle (unallocated)                                     $117
 ─────────────────────────────────────────────────────────
 Total                                                  $350
+
+LOAD BALANCERS
+──────────────
+NAME                        NAMESPACE    COST/MO
+app-ingress                 app-prod     $16
+
+COST BREAKDOWN
+━━━━━━━━━━━━━━
+Compute:         $350
+Storage:         $0
+Load Balancers:  $16
+Network:         $0
+Total:           $367
 ```
 
 No agent to deploy. No dashboard to maintain. No YAML to configure. Just install and run.

@@ -34,6 +34,10 @@ func (m *mockPricing) GetNodePricing(_ context.Context, node collector.NodeInfo)
 	}, nil
 }
 
+func (m *mockPricing) GetStoragePricePerGiBMonth(storageClass string) float64 { return 0.10 }
+func (m *mockPricing) GetLoadBalancerPricePerHour() float64                    { return 0.025 }
+func (m *mockPricing) GetNetworkEgressPricePerGiB() float64                    { return 0.01 }
+
 func TestResourcePercentage(t *testing.T) {
 	if resourcePercentage(500, 1000) != 0.5 {
 		t.Error("expected 0.5")

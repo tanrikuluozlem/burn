@@ -8,7 +8,7 @@ type CostReport struct {
 	TotalPods       int
 	SkippedNodes    int
 	HourlyCost      float64
-	MonthlyCost     float64
+	MonthlyCost     float64 // compute only
 	TotalIdleCost   float64 // monthly idle cost
 	Nodes           []NodeCost
 	InefficientPods []PodEfficiency
@@ -17,6 +17,15 @@ type CostReport struct {
 	WasteAnalysis   WasteAnalysis
 	MetricsSource   string // "prometheus" or "requests"
 	Period          string `json:"period,omitempty"`
+
+	// Non-compute costs
+	PVCosts          []PVCost     `json:"pv_costs,omitempty"`
+	LBCosts          []LBCost     `json:"lb_costs,omitempty"`
+	NetworkCost      NetworkCost  `json:"network_cost,omitempty"`
+	TotalPVCost      float64      `json:"total_pv_cost,omitempty"`
+	TotalLBCost      float64      `json:"total_lb_cost,omitempty"`
+	TotalNetworkCost float64      `json:"total_network_cost,omitempty"`
+	TotalMonthlyCost float64      `json:"total_monthly_cost"` // compute + storage + LB + network
 }
 
 type NodeCost struct {
@@ -68,8 +77,28 @@ type NamespaceCost struct {
 	MemRequest  int64   `json:"mem_request"` // total bytes
 	MemUsage    int64   `json:"mem_usage"`   // total bytes
 	MonthlyCost float64 `json:"monthly_cost"`
-	CPUCost     float64 `json:"cpu_cost"` // total CPU-attributable monthly cost
-	RAMCost     float64 `json:"ram_cost"` // total RAM-attributable monthly cost
+	CPUCost     float64 `json:"cpu_cost"`
+	RAMCost     float64 `json:"ram_cost"`
+	StorageCost float64 `json:"storage_cost,omitempty"`
+}
+
+type PVCost struct {
+	Name         string  `json:"name"`
+	Namespace    string  `json:"namespace"`
+	StorageClass string  `json:"storage_class"`
+	CapacityGiB  float64 `json:"capacity_gib"`
+	MonthlyCost  float64 `json:"monthly_cost"`
+}
+
+type LBCost struct {
+	Name        string  `json:"name"`
+	Namespace   string  `json:"namespace"`
+	MonthlyCost float64 `json:"monthly_cost"`
+}
+
+type NetworkCost struct {
+	EgressGiBPerMonth float64 `json:"egress_gib_per_month"`
+	MonthlyCost       float64 `json:"monthly_cost"`
 }
 
 type WasteAnalysis struct {

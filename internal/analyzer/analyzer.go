@@ -84,7 +84,31 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 	report.SkippedNodes = skipped
 
 	report.AllPods = allPods
+
+	// PV costs
+	pvCosts := calculatePVCosts(info.PVCs, a.pricing)
+	report.PVCosts = pvCosts
+	for _, pv := range pvCosts {
+		report.TotalPVCost += pv.MonthlyCost
+	}
+
+	// LB costs
+	lbCosts := calculateLBCosts(info.LoadBalancers, a.pricing)
+	report.LBCosts = lbCosts
+	for _, lb := range lbCosts {
+		report.TotalLBCost += lb.MonthlyCost
+	}
+
+	// Network costs
+	report.NetworkCost = calculateNetworkCost(info.Nodes, a.pricing)
+	report.TotalNetworkCost = report.NetworkCost.MonthlyCost
+
+	// Namespace aggregation (with PV storage costs)
 	report.Namespaces = aggregateByNamespace(allPods)
+	addStorageCostToNamespaces(report.Namespaces, pvCosts)
+
+	// Total
+	report.TotalMonthlyCost = report.MonthlyCost + report.TotalPVCost + report.TotalLBCost + report.TotalNetworkCost
 
 	if hasPrometheus && len(allPods) > 0 {
 		sorted := make([]PodEfficiency, len(allPods))
@@ -284,4 +308,65 @@ func recommendationFor(nc NodeCost) string {
 		return "High idle on on-demand - consider spot instances"
 	}
 	return "Review workload placement"
+}
+
+func calculatePVCosts(pvcs []collector.PVCInfo, p pricing.Provider) []PVCost {
+	var result []PVCost
+	for _, pvc := range pvcs {
+		gib := float64(pvc.RequestedBytes) / (1024 * 1024 * 1024)
+		if gib <= 0 {
+			continue
+		}
+		pricePerMonth := p.GetStoragePricePerGiBMonth(pvc.StorageClass)
+		result = append(result, PVCost{
+			Name:         pvc.Name,
+			Namespace:    pvc.Namespace,
+			StorageClass: pvc.StorageClass,
+			CapacityGiB:  gib,
+			MonthlyCost:  gib * pricePerMonth,
+		})
+	}
+	return result
+}
+
+func calculateLBCosts(lbs []collector.LBServiceInfo, p pricing.Provider) []LBCost {
+	var result []LBCost
+	pricePerHour := p.GetLoadBalancerPricePerHour()
+	for _, lb := range lbs {
+		result = append(result, LBCost{
+			Name:        lb.Name,
+			Namespace:   lb.Namespace,
+			MonthlyCost: pricePerHour * hoursPerMonth,
+		})
+	}
+	return result
+}
+
+func calculateNetworkCost(nodes []collector.NodeInfo, p pricing.Provider) NetworkCost {
+	var totalBytesPerSec float64
+	for _, node := range nodes {
+		totalBytesPerSec += node.NetworkEgressBytesPerSec
+	}
+	if totalBytesPerSec <= 0 {
+		return NetworkCost{}
+	}
+	giBPerMonth := totalBytesPerSec * 86400 * 30.44 / (1024 * 1024 * 1024)
+	pricePerGiB := p.GetNetworkEgressPricePerGiB()
+	return NetworkCost{
+		EgressGiBPerMonth: giBPerMonth,
+		MonthlyCost:       giBPerMonth * pricePerGiB,
+	}
+}
+
+func addStorageCostToNamespaces(namespaces []NamespaceCost, pvCosts []PVCost) {
+	nsMap := make(map[string]int)
+	for i, ns := range namespaces {
+		nsMap[ns.Name] = i
+	}
+	for _, pv := range pvCosts {
+		if idx, ok := nsMap[pv.Namespace]; ok {
+			namespaces[idx].StorageCost += pv.MonthlyCost
+			namespaces[idx].MonthlyCost += pv.MonthlyCost
+		}
+	}
 }

@@ -99,9 +99,10 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 		report.TotalLBCost += lb.MonthlyCost
 	}
 
-	// Network costs
-	report.NetworkCost = calculateNetworkCost(info.Nodes, a.pricing)
-	report.TotalNetworkCost = report.NetworkCost.MonthlyCost
+	// Network costs — requires zone/region/internet traffic classification
+	// to avoid misleading estimates. Skipped without traffic-level data.
+	report.NetworkCost = NetworkCost{}
+	report.TotalNetworkCost = 0
 
 	// Namespace aggregation (with PV storage costs)
 	report.Namespaces = aggregateByNamespace(allPods)

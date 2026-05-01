@@ -132,6 +132,31 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		}
 	}
 
+	// Collect Ingress-based load balancers (ALB/NLB via Ingress controller)
+	ingresses, err := c.client.NetworkingV1().Ingresses(c.namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("warning: failed to list ingresses: %v", err)
+	}
+	seenLBs := make(map[string]bool)
+	if ingresses != nil {
+		for _, ing := range ingresses.Items {
+			for _, lb := range ing.Status.LoadBalancer.Ingress {
+				host := lb.Hostname
+				if host == "" {
+					host = lb.IP
+				}
+				if host == "" || seenLBs[host] {
+					continue
+				}
+				seenLBs[host] = true
+				lbInfos = append(lbInfos, LBServiceInfo{
+					Name:      ing.Name,
+					Namespace: ing.Namespace,
+				})
+			}
+		}
+	}
+
 	return &ClusterInfo{
 		Nodes:         nodeInfos,
 		TotalNodes:    len(nodeInfos),

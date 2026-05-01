@@ -26,6 +26,11 @@ func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error)
 }
 
 func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
+	// Pass region to fallback for region-aware pricing
+	if node.Region != "" {
+		p.fallback.SetRegion(node.Region)
+	}
+
 	var cloudName string
 
 	switch node.CloudProvider {
@@ -132,6 +137,24 @@ func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collecto
 }
 
 func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) float64 {
+	region := p.fallback.region
+
+	// AWS EBS — API first
+	if p.aws != nil && region != "" {
+		price, err := p.aws.GetEBSPrice(context.Background(), storageClass, region)
+		if err == nil && price > 0 {
+			return price
+		}
+	}
+
+	// Azure Managed Disk — API first
+	if p.azure != nil && region != "" {
+		price, err := p.azure.GetDiskPrice(context.Background(), storageClass, region)
+		if err == nil && price > 0 {
+			return price
+		}
+	}
+
 	return p.fallback.GetStoragePricePerGiBMonth(storageClass)
 }
 

@@ -136,17 +136,15 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 		})
 	}
 
-	// Cost summary (when non-compute costs exist)
-	if report.TotalPVCost > 0 || report.TotalLBCost > 0 || report.TotalNetworkCost > 0 {
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Total: $%.0f/mo* (Compute $%.0f + Storage $%.0f + LB $%.0f + Network $%.0f)",
-					report.TotalMonthlyCost, report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost),
-			},
-		})
-	}
+	// Cost breakdown
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &TextObject{
+			Type: "mrkdwn",
+			Text: fmt.Sprintf("*Cost Breakdown:*\nCompute: $%.0f | Storage: $%.0f | LB: $%.0f | Network: $%.0f\n*Total: $%.0f/mo*",
+				report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost, report.TotalMonthlyCost),
+		},
+	})
 
 	// Potential savings
 	if report.WasteAnalysis.PotentialSavings > 0 {

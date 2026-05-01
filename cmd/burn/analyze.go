@@ -226,22 +226,13 @@ func outputTable(report *analyzer.CostReport) {
 		w.Flush()
 	}
 
-	hasNonCompute := report.TotalPVCost > 0 || report.TotalLBCost > 0 || report.TotalNetworkCost > 0
-	if hasNonCompute {
-		fmt.Println("\nCOST SUMMARY")
-		fmt.Println("━━━━━━━━━━━━")
-		fmt.Printf("Compute:         $%.0f\n", report.MonthlyCost)
-		if report.TotalPVCost > 0 {
-			fmt.Printf("Storage:         $%.0f\n", report.TotalPVCost)
-		}
-		if report.TotalLBCost > 0 {
-			fmt.Printf("Load Balancers:  $%.0f\n", report.TotalLBCost)
-		}
-		if report.TotalNetworkCost > 0 {
-			fmt.Printf("Network:         $%.0f\n", report.TotalNetworkCost)
-		}
-		fmt.Printf("Total:           $%.0f\n", report.TotalMonthlyCost)
-	}
+	fmt.Println("\nCOST BREAKDOWN")
+	fmt.Println("━━━━━━━━━━━━━━")
+	fmt.Printf("Compute:         $%.0f\n", report.MonthlyCost)
+	fmt.Printf("Storage:         $%.0f\n", report.TotalPVCost)
+	fmt.Printf("Load Balancers:  $%.0f\n", report.TotalLBCost)
+	fmt.Printf("Network:         $%.0f\n", report.TotalNetworkCost)
+	fmt.Printf("Total:           $%.0f\n", report.TotalMonthlyCost)
 
 	if report.WasteAnalysis.PotentialSavings > 0 {
 		fmt.Printf("\nPotential savings: $%.0f/mo\n", report.WasteAnalysis.PotentialSavings)

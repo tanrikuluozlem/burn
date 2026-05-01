@@ -203,6 +203,88 @@ func parseOnDemandPrice(priceJSON string) (float64, error) {
 	return 0, fmt.Errorf("no USD price in response")
 }
 
+func (p *AWSProvider) GetEBSPrice(ctx context.Context, volumeType, region string) (float64, error) {
+	key := fmt.Sprintf("ebs:%s:%s", volumeType, region)
+
+	p.mu.RLock()
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
+		p.mu.RUnlock()
+		return c.price, nil
+	}
+	p.mu.RUnlock()
+
+	usageType := ebsUsageType(volumeType, region)
+	regionCode := awsRegionToCode(region)
+
+	input := &pricing.GetProductsInput{
+		ServiceCode: aws.String("AmazonEC2"),
+		Filters: []types.Filter{
+			{
+				Type:  types.FilterTypeTermMatch,
+				Field: aws.String("productFamily"),
+				Value: aws.String("Storage"),
+			},
+			{
+				Type:  types.FilterTypeTermMatch,
+				Field: aws.String("location"),
+				Value: aws.String(regionCode),
+			},
+			{
+				Type:  types.FilterTypeTermMatch,
+				Field: aws.String("usagetype"),
+				Value: aws.String(usageType),
+			},
+		},
+		MaxResults: aws.Int32(1),
+	}
+
+	result, err := p.pricingClient.GetProducts(ctx, input)
+	if err != nil {
+		return 0, err
+	}
+	if len(result.PriceList) == 0 {
+		return 0, fmt.Errorf("no EBS pricing for %s in %s", volumeType, region)
+	}
+
+	price, err := parseOnDemandPrice(result.PriceList[0])
+	if err != nil {
+		return 0, err
+	}
+
+	p.mu.Lock()
+	p.cache[key] = cachedPrice{price: price, expiresAt: time.Now().Add(time.Hour)}
+	p.mu.Unlock()
+
+	return price, nil
+}
+
+func ebsUsageType(volumeType, region string) string {
+	prefix := ""
+	if region != "us-east-1" {
+		parts := map[string]string{
+			"eu-central-1": "EUC1", "eu-west-1": "EU", "eu-west-2": "EUW2", "eu-west-3": "EUW3",
+			"eu-north-1": "EUN1", "us-east-2": "USE2", "us-west-1": "USW1", "us-west-2": "USW2",
+			"ap-northeast-1": "APN1", "ap-northeast-2": "APN2", "ap-southeast-1": "APS1",
+			"ap-southeast-2": "APS2", "ap-south-1": "APS3", "sa-east-1": "SAE1", "ca-central-1": "CAN1",
+		}
+		if p, ok := parts[region]; ok {
+			prefix = p + "-"
+		}
+	}
+
+	volMap := map[string]string{
+		"gp2": "EBS:VolumeUsage.gp2", "gp3": "EBS:VolumeUsage.gp3",
+		"io1": "EBS:VolumeUsage.piops", "io2": "EBS:VolumeUsage.gp3.piops",
+		"st1": "EBS:VolumeUsage.st1", "sc1": "EBS:VolumeUsage.sc1",
+	}
+
+	usage := "EBS:VolumeUsage.gp2"
+	if u, ok := volMap[volumeType]; ok {
+		usage = u
+	}
+	return prefix + usage
+}
+
 func awsRegionToCode(region string) string {
 	regionMap := map[string]string{
 		"us-east-1":      "US East (N. Virginia)",

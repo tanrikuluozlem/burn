@@ -35,7 +35,7 @@ func (m *mockPricing) GetNodePricing(_ context.Context, node collector.NodeInfo)
 }
 
 func (m *mockPricing) GetStoragePricePerGiBMonth(storageClass string) float64 { return 0.10 }
-func (m *mockPricing) GetLoadBalancerPricePerHour() float64                    { return 0.025 }
+func (m *mockPricing) GetLoadBalancerPricePerHour() float64                    { return 0.0225 }
 func (m *mockPricing) GetNetworkEgressPricePerGiB() float64                    { return 0.01 }
 
 func TestResourcePercentage(t *testing.T) {
@@ -516,5 +516,118 @@ func TestCPUCostPlusRAMCostEqualsMonthlyCost(t *testing.T) {
 			t.Errorf("ns %s: MonthlyCost=%v != CPUCost(%v)+RAMCost(%v)",
 				ns.Name, ns.MonthlyCost, ns.CPUCost, ns.RAMCost)
 		}
+	}
+}
+
+func TestPVCostCalculation(t *testing.T) {
+	pvcs := []collector.PVCInfo{
+		{Name: "data-postgres", Namespace: "database", StorageClass: "gp3", RequestedBytes: 100 * 1024 * 1024 * 1024},
+		{Name: "redis-data", Namespace: "cache", StorageClass: "gp2", RequestedBytes: 20 * 1024 * 1024 * 1024},
+	}
+
+	costs := calculatePVCosts(pvcs, &mockPricing{price: 0.10})
+
+	if len(costs) != 2 {
+		t.Fatalf("expected 2 PV costs, got %d", len(costs))
+	}
+
+	// gp3: 100GiB × $0.10/GiB/mo = $10/mo (mockPricing returns 0.10 for all)
+	if costs[0].CapacityGiB != 100 {
+		t.Errorf("capacity = %.0f, expected 100", costs[0].CapacityGiB)
+	}
+	if !floatEquals(costs[0].MonthlyCost, 10.0) {
+		t.Errorf("cost = %.2f, expected 10.00", costs[0].MonthlyCost)
+	}
+	if costs[0].Namespace != "database" {
+		t.Errorf("namespace = %s, expected database", costs[0].Namespace)
+	}
+
+	// gp2: 20GiB × $0.10/GiB/mo = $2/mo
+	if !floatEquals(costs[1].MonthlyCost, 2.0) {
+		t.Errorf("cost = %.2f, expected 2.00", costs[1].MonthlyCost)
+	}
+}
+
+func TestLBCostCalculation(t *testing.T) {
+	lbs := []collector.LBServiceInfo{
+		{Name: "app-ingress", Namespace: "ingress"},
+		{Name: "api-lb", Namespace: "prod"},
+	}
+
+	costs := calculateLBCosts(lbs, &mockPricing{price: 0.10})
+
+	if len(costs) != 2 {
+		t.Fatalf("expected 2 LB costs, got %d", len(costs))
+	}
+
+	// $0.0225/hr × 730 = $16.43/mo
+	expected := 0.0225 * 730
+	if !floatEquals(costs[0].MonthlyCost, expected) {
+		t.Errorf("LB cost = %.2f, expected %.2f", costs[0].MonthlyCost, expected)
+	}
+	if costs[0].Namespace != "ingress" {
+		t.Errorf("namespace = %s, expected ingress", costs[0].Namespace)
+	}
+}
+
+func TestStorageCostInNamespace(t *testing.T) {
+	namespaces := []NamespaceCost{
+		{Name: "database", MonthlyCost: 50},
+		{Name: "cache", MonthlyCost: 30},
+	}
+
+	pvCosts := []PVCost{
+		{Name: "pg-data", Namespace: "database", MonthlyCost: 10},
+		{Name: "redis", Namespace: "cache", MonthlyCost: 2},
+	}
+
+	addStorageCostToNamespaces(namespaces, pvCosts)
+
+	if namespaces[0].StorageCost != 10 {
+		t.Errorf("database storage = %.0f, expected 10", namespaces[0].StorageCost)
+	}
+	if namespaces[0].MonthlyCost != 60 {
+		t.Errorf("database total = %.0f, expected 60 (50+10)", namespaces[0].MonthlyCost)
+	}
+	if namespaces[1].StorageCost != 2 {
+		t.Errorf("cache storage = %.0f, expected 2", namespaces[1].StorageCost)
+	}
+}
+
+func TestTotalMonthlyCostIncludes(t *testing.T) {
+	a := New(&mockPricing{price: 0.10})
+
+	info := &collector.ClusterInfo{
+		TotalNodes: 1,
+		TotalPods:  1,
+		Nodes: []collector.NodeInfo{{
+			Name: "node-1", InstanceType: "t3.large", Region: "us-east-1",
+			CPUAllocatable: 2000, MemAllocatable: 8 * 1024 * 1024 * 1024,
+		}},
+		PVCs: []collector.PVCInfo{
+			{Name: "data", Namespace: "default", StorageClass: "gp3", RequestedBytes: 50 * 1024 * 1024 * 1024},
+		},
+		LoadBalancers: []collector.LBServiceInfo{
+			{Name: "lb-1", Namespace: "default"},
+		},
+	}
+
+	report, err := a.Analyze(context.Background(), info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Compute: $0.10 × 730 = $73
+	// PV: 50GiB × $0.10 = $5
+	// LB: $0.0225 × 730 = $16.425
+	if report.TotalPVCost != 5 {
+		t.Errorf("TotalPVCost = %.2f, expected 5.00", report.TotalPVCost)
+	}
+	if !floatEquals(report.TotalLBCost, 16.425) {
+		t.Errorf("TotalLBCost = %.2f, expected 16.425", report.TotalLBCost)
+	}
+	expectedTotal := report.MonthlyCost + report.TotalPVCost + report.TotalLBCost
+	if !floatEquals(report.TotalMonthlyCost, expectedTotal) {
+		t.Errorf("TotalMonthlyCost = %.2f, expected %.2f", report.TotalMonthlyCost, expectedTotal)
 	}
 }

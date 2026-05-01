@@ -201,6 +201,18 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 		summary += fmt.Sprintf("\n*Total: $%.0f/mo*", report.MonthlyCost)
 	}
 
+	// Load Balancers
+	if len(report.LBCosts) > 0 {
+		summary += "\n\n*Load Balancers:*"
+		for _, lb := range report.LBCosts {
+			summary += fmt.Sprintf("\n• `%s` (%s) — $%.0f/mo", lb.Name, lb.Namespace, lb.MonthlyCost)
+		}
+	}
+
+	// Cost Breakdown
+	summary += fmt.Sprintf("\n\n*Cost Breakdown:*\nCompute: $%.0f | Storage: $%.0f | LB: $%.0f | Network: $%.0f\n*Total: $%.0f/mo*",
+		report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost, report.TotalMonthlyCost)
+
 	if report.WasteAnalysis.PotentialSavings > 0 {
 		summary += fmt.Sprintf("\n\n_Potential savings: $%.0f/mo_", report.WasteAnalysis.PotentialSavings)
 	}

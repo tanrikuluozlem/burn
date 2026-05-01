@@ -130,3 +130,15 @@ func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collecto
 		RAMCostPerGiB:  ramPerGiB,
 	}, nil
 }
+
+func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) float64 {
+	return p.fallback.GetStoragePricePerGiBMonth(storageClass)
+}
+
+func (p *CloudPricingProvider) GetLoadBalancerPricePerHour() float64 {
+	return p.fallback.GetLoadBalancerPricePerHour()
+}
+
+func (p *CloudPricingProvider) GetNetworkEgressPricePerGiB() float64 {
+	return p.fallback.GetNetworkEgressPricePerGiB()
+}

@@ -9,6 +9,7 @@ import (
 
 type StaticProvider struct {
 	prices map[string]map[string]float64 // region -> instanceType -> price
+	region string
 }
 
 func NewStaticProvider() *StaticProvider {
@@ -16,6 +17,11 @@ func NewStaticProvider() *StaticProvider {
 		prices: defaultPrices(),
 	}
 }
+
+func (p *StaticProvider) SetRegion(region string) {
+	p.region = region
+}
+
 
 func (p *StaticProvider) GetHourlyPrice(_ context.Context, instanceType, region string, isSpot bool) (float64, error) {
 	regionPrices, ok := p.prices[region]
@@ -66,6 +72,33 @@ func estimatePrice(instanceType string) float64 {
 
 func (p *StaticProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
 	return p.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
+}
+
+var storagePrices = map[string]float64{
+	// AWS EBS (us-east-1)
+	"gp2": 0.10, "gp3": 0.08, "io1": 0.125, "io2": 0.125, "st1": 0.045, "sc1": 0.015,
+	// GCP Persistent Disk
+	"pd-standard": 0.04, "pd-ssd": 0.17, "pd-balanced": 0.10,
+	// Azure Managed Disk
+	"Premium_LRS": 0.135, "StandardSSD_LRS": 0.075, "Standard_LRS": 0.04,
+	"managed-premium": 0.135, "managed": 0.04,
+	// Default fallback
+	"default": 0.04,
+}
+
+func (p *StaticProvider) GetStoragePricePerGiBMonth(storageClass string) float64 {
+	if price, ok := storagePrices[storageClass]; ok {
+		return price
+	}
+	return storagePrices["default"]
+}
+
+func (p *StaticProvider) GetLoadBalancerPricePerHour() float64 {
+	return 0.0225 // AWS ALB/NLB (us-east-1)
+}
+
+func (p *StaticProvider) GetNetworkEgressPricePerGiB() float64 {
+	return 0.01 // zone egress
 }
 
 func (p *StaticProvider) GetNodePricing(ctx context.Context, node collector.NodeInfo) (*NodePricing, error) {

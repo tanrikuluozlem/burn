@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 )
+
+const maxResponseSize = 10 * 1024 * 1024 // 10MB
 
 type PrometheusClient struct {
 	baseURL    string
@@ -21,7 +24,7 @@ func NewPrometheusClient(baseURL, period string) *PrometheusClient {
 		baseURL: baseURL,
 		period:  period,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 2 * time.Minute,
 		},
 	}
 }
@@ -69,7 +72,7 @@ func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResul
 	}
 
 	var result promResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&result); err != nil {
 		return nil, err
 	}
 
@@ -218,6 +221,29 @@ func (p *PrometheusClient) GetPodMemoryUsageP95(ctx context.Context) (map[string
 		key := ns + "/" + pod
 		if val, err := parseValue(r.Value); err == nil {
 			usage[key] = int64(val)
+		}
+	}
+	return usage, nil
+}
+
+func (p *PrometheusClient) GetNodeNetworkEgress(ctx context.Context) (map[string]float64, error) {
+	query := p.wrapQuery(`sum(rate(node_network_transmit_bytes_total{device!="lo"}[5m])) by (instance)`)
+	results, err := p.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	usage := make(map[string]float64)
+	for _, r := range results {
+		node := r.Metric["node"]
+		if node == "" {
+			node = r.Metric["instance"]
+		}
+		if node == "" {
+			continue
+		}
+		if val, err := parseValue(r.Value); err == nil {
+			usage[node] = val // bytes per second
 		}
 	}
 	return usage, nil

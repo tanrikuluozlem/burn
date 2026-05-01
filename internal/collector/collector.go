@@ -86,10 +86,83 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		c.enrichWithMetrics(ctx, nodeInfos)
 	}
 
+	// Collect PVCs
+	pvcs, err := c.client.CoreV1().PersistentVolumeClaims(c.namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("warning: failed to list PVCs: %v", err)
+	}
+	var pvcInfos []PVCInfo
+	if pvcs != nil {
+		for _, pvc := range pvcs.Items {
+			if pvc.Status.Phase != corev1.ClaimBound {
+				continue
+			}
+			var reqBytes int64
+			if storage, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+				reqBytes = storage.Value()
+			}
+			sc := ""
+			if pvc.Spec.StorageClassName != nil {
+				sc = *pvc.Spec.StorageClassName
+			}
+			pvcInfos = append(pvcInfos, PVCInfo{
+				Name:           pvc.Name,
+				Namespace:      pvc.Namespace,
+				StorageClass:   sc,
+				RequestedBytes: reqBytes,
+				VolumeName:     pvc.Spec.VolumeName,
+			})
+		}
+	}
+
+	// Collect LoadBalancer services
+	services, err := c.client.CoreV1().Services(c.namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("warning: failed to list services: %v", err)
+	}
+	var lbInfos []LBServiceInfo
+	if services != nil {
+		for _, svc := range services.Items {
+			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+				lbInfos = append(lbInfos, LBServiceInfo{
+					Name:      svc.Name,
+					Namespace: svc.Namespace,
+				})
+			}
+		}
+	}
+
+	// Collect Ingress-based load balancers (ALB/NLB via Ingress controller)
+	ingresses, err := c.client.NetworkingV1().Ingresses(c.namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("warning: failed to list ingresses: %v", err)
+	}
+	seenLBs := make(map[string]bool)
+	if ingresses != nil {
+		for _, ing := range ingresses.Items {
+			for _, lb := range ing.Status.LoadBalancer.Ingress {
+				host := lb.Hostname
+				if host == "" {
+					host = lb.IP
+				}
+				if host == "" || seenLBs[host] {
+					continue
+				}
+				seenLBs[host] = true
+				lbInfos = append(lbInfos, LBServiceInfo{
+					Name:      ing.Name,
+					Namespace: ing.Namespace,
+				})
+			}
+		}
+	}
+
 	return &ClusterInfo{
-		Nodes:      nodeInfos,
-		TotalNodes: len(nodeInfos),
-		TotalPods:  len(pods.Items),
+		Nodes:         nodeInfos,
+		TotalNodes:    len(nodeInfos),
+		TotalPods:     len(pods.Items),
+		PVCs:          pvcInfos,
+		LoadBalancers: lbInfos,
 	}, nil
 }
 
@@ -102,6 +175,16 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 	nodeMem, err := c.prometheus.GetNodeMemoryUsage(ctx)
 	if err != nil {
 		log.Printf("warning: failed to get node memory metrics: %v", err)
+	}
+
+	// Fetch network egress
+	nodeNet, err := c.prometheus.GetNodeNetworkEgress(ctx)
+	if err != nil {
+		log.Printf("warning: failed to get node network metrics: %v", err)
+	}
+	netByIP := make(map[string]float64)
+	for k, v := range nodeNet {
+		netByIP[extractIP(k)] = v
 	}
 
 	// Fetch pod metrics
@@ -136,6 +219,9 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 		}
 		if mem, ok := memByIP[ip]; ok {
 			nodes[i].MemoryUsage = mem
+		}
+		if net, ok := netByIP[ip]; ok {
+			nodes[i].NetworkEgressBytesPerSec = net
 		}
 
 		// Enrich pods on this node

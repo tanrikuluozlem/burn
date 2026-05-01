@@ -26,6 +26,11 @@ func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error)
 }
 
 func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
+	// Pass region to fallback for region-aware pricing
+	if node.Region != "" {
+		p.fallback.SetRegion(node.Region)
+	}
+
 	var cloudName string
 
 	switch node.CloudProvider {
@@ -62,14 +67,7 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, true)
 	}
 
-	// On-demand: embedded DB → cloud API → static fallback
-	if cloudName != "" {
-		if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
-			return price, nil
-		}
-	}
-
-	// Cloud API
+	// On-demand: cloud API → embedded DB → static fallback
 	switch node.CloudProvider {
 	case collector.CloudAWS:
 		if p.aws != nil {
@@ -82,6 +80,13 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 			if price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, false); err == nil {
 				return price, nil
 			}
+		}
+	}
+
+	// Embedded DB fallback
+	if cloudName != "" {
+		if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
+			return price, nil
 		}
 	}
 
@@ -104,15 +109,15 @@ func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType,
 		return p.fallback.GetHourlyPrice(ctx, instanceType, region, true)
 	}
 
-	// On-demand: try embedded DB first
-	if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
-		return price, nil
-	}
-
+	// On-demand: cloud API → embedded DB → static fallback
 	if p.aws != nil {
 		if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false); err == nil {
 			return price, nil
 		}
+	}
+
+	if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
+		return price, nil
 	}
 
 	return p.fallback.GetHourlyPrice(ctx, instanceType, region, false)
@@ -129,4 +134,34 @@ func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collecto
 		CPUCostPerCore: cpuPerCore,
 		RAMCostPerGiB:  ramPerGiB,
 	}, nil
+}
+
+func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) float64 {
+	region := p.fallback.region
+
+	// AWS EBS — API first
+	if p.aws != nil && region != "" {
+		price, err := p.aws.GetEBSPrice(context.Background(), storageClass, region)
+		if err == nil && price > 0 {
+			return price
+		}
+	}
+
+	// Azure Managed Disk — API first
+	if p.azure != nil && region != "" {
+		price, err := p.azure.GetDiskPrice(context.Background(), storageClass, region)
+		if err == nil && price > 0 {
+			return price
+		}
+	}
+
+	return p.fallback.GetStoragePricePerGiBMonth(storageClass)
+}
+
+func (p *CloudPricingProvider) GetLoadBalancerPricePerHour() float64 {
+	return p.fallback.GetLoadBalancerPricePerHour()
+}
+
+func (p *CloudPricingProvider) GetNetworkEgressPricePerGiB() float64 {
+	return p.fallback.GetNetworkEgressPricePerGiB()
 }

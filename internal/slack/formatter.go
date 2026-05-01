@@ -105,6 +105,47 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 		})
 	}
 
+	// Storage costs
+	if len(report.PVCosts) > 0 {
+		pvLines := make([]string, 0, len(report.PVCosts))
+		for _, pv := range report.PVCosts {
+			pvLines = append(pvLines, fmt.Sprintf("• `%s` (%s) — %s %.0fGi — $%.0f/mo",
+				pv.Name, pv.Namespace, pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost))
+		}
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: "*Storage:*\n" + strings.Join(pvLines, "\n"),
+			},
+		})
+	}
+
+	// LB costs
+	if len(report.LBCosts) > 0 {
+		lbLines := make([]string, 0, len(report.LBCosts))
+		for _, lb := range report.LBCosts {
+			lbLines = append(lbLines, fmt.Sprintf("• `%s` (%s) — $%.0f/mo", lb.Name, lb.Namespace, lb.MonthlyCost))
+		}
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: "*Load Balancers:*\n" + strings.Join(lbLines, "\n"),
+			},
+		})
+	}
+
+	// Cost breakdown
+	blocks = append(blocks, Block{
+		Type: "section",
+		Text: &TextObject{
+			Type: "mrkdwn",
+			Text: fmt.Sprintf("*Cost Breakdown:*\nCompute: $%.0f | Storage: $%.0f | LB: $%.0f | Network: $%.0f\n*Total: $%.0f/mo*",
+				report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost, report.TotalMonthlyCost),
+		},
+	})
+
 	// Potential savings
 	if report.WasteAnalysis.PotentialSavings > 0 {
 		blocks = append(blocks, Block{

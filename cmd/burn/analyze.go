@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var validPeriod = regexp.MustCompile(`^\d+[smhdwy]$`)
+var validPeriod = regexp.MustCompile(`^\d{1,4}[smhdwy]$`)
 
 func isValidPeriod(p string) bool {
 	return validPeriod.MatchString(p)
@@ -201,6 +201,38 @@ func outputTable(report *analyzer.CostReport) {
 	if len(report.Namespaces) > 0 {
 		outputNamespaceSummary(report.Namespaces, hasPrometheus, report.MonthlyCost)
 	}
+
+	if len(report.PVCosts) > 0 {
+		fmt.Println("\nSTORAGE")
+		fmt.Println("───────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tNAMESPACE\tCLASS\tSIZE\tCOST/MO")
+		for _, pv := range report.PVCosts {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%.0fGi\t$%.0f\n",
+				truncate(pv.Name, 30), truncate(pv.Namespace, 15), pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
+		}
+		w.Flush()
+	}
+
+	if len(report.LBCosts) > 0 {
+		fmt.Println("\nLOAD BALANCERS")
+		fmt.Println("──────────────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tNAMESPACE\tCOST/MO")
+		for _, lb := range report.LBCosts {
+			fmt.Fprintf(w, "%s\t%s\t$%.0f\n",
+				truncate(lb.Name, 30), truncate(lb.Namespace, 15), lb.MonthlyCost)
+		}
+		w.Flush()
+	}
+
+	fmt.Println("\nCOST BREAKDOWN")
+	fmt.Println("━━━━━━━━━━━━━━")
+	fmt.Printf("Compute:         $%.0f\n", report.MonthlyCost)
+	fmt.Printf("Storage:         $%.0f\n", report.TotalPVCost)
+	fmt.Printf("Load Balancers:  $%.0f\n", report.TotalLBCost)
+	fmt.Printf("Network:         $%.0f\n", report.TotalNetworkCost)
+	fmt.Printf("Total:           $%.0f\n", report.TotalMonthlyCost)
 
 	if report.WasteAnalysis.PotentialSavings > 0 {
 		fmt.Printf("\nPotential savings: $%.0f/mo\n", report.WasteAnalysis.PotentialSavings)

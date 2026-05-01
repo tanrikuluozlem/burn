@@ -111,6 +111,70 @@ type azurePriceItem struct {
 	MeterName   string  `json:"meterName"`
 }
 
+func (p *AzureProvider) GetDiskPrice(ctx context.Context, diskType, region string) (float64, error) {
+	key := fmt.Sprintf("disk:%s:%s", diskType, region)
+
+	p.mu.RLock()
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
+		p.mu.RUnlock()
+		return c.price, nil
+	}
+	p.mu.RUnlock()
+
+	// Map storage class to Azure meter name
+	meterFilter := azureDiskMeter(diskType)
+
+	filter := fmt.Sprintf(
+		"serviceName eq 'Storage' and armRegionName eq '%s' and meterName eq '%s' and priceType eq 'Consumption'",
+		region, meterFilter,
+	)
+	reqURL := fmt.Sprintf("%s?$filter=%s", azurePricingAPI, url.QueryEscape(filter))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("azure disk: %d", resp.StatusCode)
+	}
+
+	var result azurePricingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+
+	for _, item := range result.Items {
+		if item.RetailPrice > 0 {
+			p.mu.Lock()
+			p.cache[key] = cachedPrice{price: item.RetailPrice, expiresAt: time.Now().Add(time.Hour)}
+			p.mu.Unlock()
+			return item.RetailPrice, nil
+		}
+	}
+	return 0, fmt.Errorf("no disk pricing for %s in %s", diskType, region)
+}
+
+func azureDiskMeter(diskType string) string {
+	meters := map[string]string{
+		"Premium_LRS":     "P4 LRS Disk",
+		"StandardSSD_LRS": "E4 LRS Disk",
+		"Standard_LRS":    "S4 LRS Disk",
+		"managed-premium": "P4 LRS Disk",
+		"managed":         "S4 LRS Disk",
+	}
+	if m, ok := meters[diskType]; ok {
+		return m
+	}
+	return "S4 LRS Disk"
+}
+
 func isWindowsProduct(name string) bool {
 	return strings.HasSuffix(name, "Windows")
 }

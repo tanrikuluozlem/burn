@@ -202,6 +202,47 @@ func outputTable(report *analyzer.CostReport) {
 		outputNamespaceSummary(report.Namespaces, hasPrometheus, report.MonthlyCost)
 	}
 
+	if len(report.PVCosts) > 0 {
+		fmt.Println("\nSTORAGE")
+		fmt.Println("───────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tNAMESPACE\tCLASS\tSIZE\tCOST/MO")
+		for _, pv := range report.PVCosts {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%.0fGi\t$%.0f\n",
+				truncate(pv.Name, 30), truncate(pv.Namespace, 15), pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
+		}
+		w.Flush()
+	}
+
+	if len(report.LBCosts) > 0 {
+		fmt.Println("\nLOAD BALANCERS")
+		fmt.Println("──────────────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tNAMESPACE\tCOST/MO")
+		for _, lb := range report.LBCosts {
+			fmt.Fprintf(w, "%s\t%s\t$%.0f\n",
+				truncate(lb.Name, 30), truncate(lb.Namespace, 15), lb.MonthlyCost)
+		}
+		w.Flush()
+	}
+
+	hasNonCompute := report.TotalPVCost > 0 || report.TotalLBCost > 0 || report.TotalNetworkCost > 0
+	if hasNonCompute {
+		fmt.Println("\nCOST SUMMARY")
+		fmt.Println("━━━━━━━━━━━━")
+		fmt.Printf("Compute:         $%.0f\n", report.MonthlyCost)
+		if report.TotalPVCost > 0 {
+			fmt.Printf("Storage:         $%.0f\n", report.TotalPVCost)
+		}
+		if report.TotalLBCost > 0 {
+			fmt.Printf("Load Balancers:  $%.0f\n", report.TotalLBCost)
+		}
+		if report.TotalNetworkCost > 0 {
+			fmt.Printf("Network:         $%.0f\n", report.TotalNetworkCost)
+		}
+		fmt.Printf("Total:           $%.0f\n", report.TotalMonthlyCost)
+	}
+
 	if report.WasteAnalysis.PotentialSavings > 0 {
 		fmt.Printf("\nPotential savings: $%.0f/mo\n", report.WasteAnalysis.PotentialSavings)
 	}

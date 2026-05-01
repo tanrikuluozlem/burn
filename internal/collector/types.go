@@ -20,9 +20,10 @@ type NodeInfo struct {
 	MemoryBytes    int64
 	CPUAllocatable int64
 	MemAllocatable int64
-	CPUUsage       float64
-	MemoryUsage    int64
-	IsSpot         bool
+	CPUUsage              float64
+	MemoryUsage           int64
+	NetworkEgressBytesPerSec float64
+	IsSpot                bool
 	Labels         map[string]string
 	Pods           []PodInfo
 }
@@ -40,8 +41,23 @@ type PodInfo struct {
 	MemoryP95Usage int64   // p95 memory usage in bytes (over analysis period)
 }
 
+type PVCInfo struct {
+	Name           string
+	Namespace      string
+	StorageClass   string
+	RequestedBytes int64
+	VolumeName     string
+}
+
+type LBServiceInfo struct {
+	Name      string
+	Namespace string
+}
+
 type ClusterInfo struct {
-	Nodes      []NodeInfo
-	TotalNodes int
-	TotalPods  int
+	Nodes         []NodeInfo
+	TotalNodes    int
+	TotalPods     int
+	PVCs          []PVCInfo
+	LoadBalancers []LBServiceInfo
 }

@@ -226,6 +226,29 @@ func (p *PrometheusClient) GetPodMemoryUsageP95(ctx context.Context) (map[string
 	return usage, nil
 }
 
+func (p *PrometheusClient) GetNodeNetworkEgress(ctx context.Context) (map[string]float64, error) {
+	query := p.wrapQuery(`sum(rate(node_network_transmit_bytes_total{device!="lo"}[5m])) by (instance)`)
+	results, err := p.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	usage := make(map[string]float64)
+	for _, r := range results {
+		node := r.Metric["node"]
+		if node == "" {
+			node = r.Metric["instance"]
+		}
+		if node == "" {
+			continue
+		}
+		if val, err := parseValue(r.Value); err == nil {
+			usage[node] = val // bytes per second
+		}
+	}
+	return usage, nil
+}
+
 func parseValue(v []any) (float64, error) {
 	if len(v) < 2 {
 		return 0, fmt.Errorf("invalid value")

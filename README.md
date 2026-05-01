@@ -35,7 +35,7 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 ## Why burn
 
 - **Zero setup** — `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
-- **Accurate** — CPU and RAM priced independently using real cloud provider rates. Per-resource cost allocation with idle detection.
+- **Accurate** — Compute, storage, and load balancer costs from cloud provider APIs. Per-resource cost allocation with idle detection.
 - **AI-powered** — Ask questions in plain English, get kubectl commands you can copy-paste.
 - **Slack-native** — `/burn` for instant cost reports. `/burn ask "..."` for AI analysis. No context switching.
 - **Time-aware** — `--period 7d` uses Prometheus history for weekly averages, not just a point-in-time snapshot.
@@ -163,16 +163,16 @@ $ kubectl set resources deployment argocd-dex-server -n argocd \
 ## How it works
 
 ```
-Kubernetes API → node specs, pod requests
+Kubernetes API → nodes, pods, PVCs, services, ingresses
 Prometheus     → actual CPU & memory usage (optional)
-Cloud Pricing  → real VM prices (AWS, Azure, GCP)
+Cloud Pricing  → real VM and storage prices (AWS, Azure, GCP)
          ↓
-    Cost Engine → per-namespace breakdown, idle detection, savings
+    Cost Engine → per-namespace breakdown, storage, load balancers, idle detection
          ↓
     CLI / Slack / AI Recommendations
 ```
 
-Pricing data for 600+ AWS and 300+ Azure instances is embedded and updated weekly via GitHub Actions.
+Pricing data for 600+ AWS and 300+ Azure instances is embedded and updated weekly via GitHub Actions. Storage and load balancer costs are fetched from cloud APIs at runtime.
 
 ## Deploy to Kubernetes
 

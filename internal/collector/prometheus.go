@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 )
+
+const maxResponseSize = 10 * 1024 * 1024 // 10MB
 
 type PrometheusClient struct {
 	baseURL    string
@@ -21,7 +24,7 @@ func NewPrometheusClient(baseURL, period string) *PrometheusClient {
 		baseURL: baseURL,
 		period:  period,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 2 * time.Minute,
 		},
 	}
 }
@@ -69,7 +72,7 @@ func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResul
 	}
 
 	var result promResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&result); err != nil {
 		return nil, err
 	}
 

@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var validPeriod = regexp.MustCompile(`^\d+[smhdwy]$`)
+var validPeriod = regexp.MustCompile(`^\d{1,4}[smhdwy]$`)
 
 func isValidPeriod(p string) bool {
 	return validPeriod.MatchString(p)

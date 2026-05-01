@@ -49,10 +49,12 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/slack", s.handleSlack)
 
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:           fmt.Sprintf(":%d", cfg.Port),
+		Handler:        mux,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   60 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1MB
 	}
 
 	return s, nil
@@ -77,6 +79,9 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit request body size (1MB)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 	// Verify Slack signature
 	if err := verifySlackSignature(r, s.config.SigningSecret); err != nil {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
@@ -90,6 +95,12 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 
 	text := strings.TrimSpace(r.FormValue("text"))
 	responseURL := r.FormValue("response_url")
+
+	// Validate response URL is from Slack
+	if responseURL != "" && !strings.HasPrefix(responseURL, "https://hooks.slack.com/") {
+		http.Error(w, "invalid response URL", http.StatusBadRequest)
+		return
+	}
 
 	// Immediate acknowledgment
 	w.Header().Set("Content-Type", "application/json")
@@ -130,7 +141,8 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 	}
 
 	if err != nil {
-		response = fmt.Sprintf("Error: %v", err)
+		fmt.Printf("slack command error: %v\n", err)
+		response = "Something went wrong. Please try again."
 	}
 
 	// Send response to Slack
@@ -272,8 +284,19 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 		},
 	}
 
-	body, _ := json.Marshal(payload)
-	resp, err := http.Post(responseURL, "application/json", strings.NewReader(string(body)))
+	body, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Printf("failed to marshal slack response: %v\n", err)
+		return
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Post(responseURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		fmt.Printf("failed to send slack response: %v\n", err)
 		return

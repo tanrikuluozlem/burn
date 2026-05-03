@@ -267,6 +267,16 @@ func parseNode(node corev1.Node) NodeInfo {
 	labels := node.Labels
 	cloud := detectCloudProvider(labels)
 
+	// GPU detection
+	var gpuCount int64
+	if gpu, ok := node.Status.Capacity["nvidia.com/gpu"]; ok {
+		gpuCount = gpu.Value()
+	}
+	gpuType := labels["nvidia.com/gpu.product"]
+	if gpuType == "" {
+		gpuType = labels["cloud.google.com/gke-accelerator"]
+	}
+
 	return NodeInfo{
 		Name:           node.Name,
 		InternalIP:     getNodeInternalIP(node),
@@ -278,6 +288,8 @@ func parseNode(node corev1.Node) NodeInfo {
 		MemoryBytes:    node.Status.Capacity.Memory().Value(),
 		CPUAllocatable: node.Status.Allocatable.Cpu().MilliValue(),
 		MemAllocatable: node.Status.Allocatable.Memory().Value(),
+		GPUCount:       gpuCount,
+		GPUType:        gpuType,
 		IsSpot:         isSpotInstance(labels),
 		Labels:         labels,
 	}
@@ -345,13 +357,16 @@ func extractIPFromNodeName(name string) string {
 }
 
 func parsePod(pod corev1.Pod) PodInfo {
-	var cpuReq, cpuLim, memReq, memLim int64
+	var cpuReq, cpuLim, memReq, memLim, gpuReq int64
 
 	for _, container := range pod.Spec.Containers {
 		cpuReq += container.Resources.Requests.Cpu().MilliValue()
 		cpuLim += container.Resources.Limits.Cpu().MilliValue()
 		memReq += container.Resources.Requests.Memory().Value()
 		memLim += container.Resources.Limits.Memory().Value()
+		if gpu, ok := container.Resources.Requests["nvidia.com/gpu"]; ok {
+			gpuReq += gpu.Value()
+		}
 	}
 
 	return PodInfo{
@@ -361,5 +376,6 @@ func parsePod(pod corev1.Pod) PodInfo {
 		CPULimit:      cpuLim,
 		MemoryRequest: memReq,
 		MemoryLimit:   memLim,
+		GPURequest:    gpuReq,
 	}
 }

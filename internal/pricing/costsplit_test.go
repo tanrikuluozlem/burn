@@ -103,3 +103,29 @@ func TestSplitNodeCostComputeVsMemory(t *testing.T) {
 		t.Errorf("compute-optimized should have higher cpuPerCore: c5=%f, r5=%f", cpuC5, cpuR5)
 	}
 }
+
+func TestSplitNodeCostWithGPU(t *testing.T) {
+	// p3.2xlarge: $3.06/hr, 8 vCPU (8000m), 61 GiB, 1 V100 GPU
+	cpuPerCore, ramPerGiB, gpuPerUnit := SplitNodeCostWithGPU(3.06, 8000, 61*1024*1024*1024, 1)
+
+	// Total must equal node price
+	cores := 8.0
+	gib := 61.0
+	total := cpuPerCore*cores + ramPerGiB*gib + gpuPerUnit*1
+	if math.Abs(total-3.06) > 0.01 {
+		t.Errorf("total %f != 3.06", total)
+	}
+
+	// GPU should be the largest component (~65%)
+	gpuShare := gpuPerUnit / 3.06
+	if gpuShare < 0.50 || gpuShare > 0.80 {
+		t.Errorf("GPU share %.2f outside expected range 50-80%%", gpuShare)
+	}
+
+	// Multi-GPU: p4d.24xlarge $32.77/hr, 96 vCPU, 1152 GiB, 8 A100 GPUs
+	cpuPerCore2, ramPerGiB2, gpuPerUnit2 := SplitNodeCostWithGPU(32.77, 96000, 1152*1024*1024*1024, 8)
+	total2 := cpuPerCore2*96 + ramPerGiB2*1152 + gpuPerUnit2*8
+	if math.Abs(total2-32.77) > 0.01 {
+		t.Errorf("multi-GPU total %f != 32.77", total2)
+	}
+}

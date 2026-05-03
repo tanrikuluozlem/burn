@@ -48,16 +48,20 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 ## Why burn
 
 - **Zero setup** — `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
-- **Accurate** — Compute, storage, and load balancer costs from cloud provider APIs. Per-resource cost allocation with idle detection.
+- **Full cost coverage** — Compute, storage, load balancers, and GPU costs from cloud provider APIs.
 - **AI-powered** — Ask questions in plain English, get kubectl commands you can copy-paste.
-- **Slack-native** — `/burn` for instant cost reports. `/burn ask "..."` for AI analysis. No context switching.
-- **Time-aware** — `--period 7d` uses Prometheus history for weekly averages, not just a point-in-time snapshot.
+- **Slack-native** — `/burn` for instant cost reports. `/burn ask "..."` for AI analysis.
+- **Cloud + on-prem** — Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters.
+- **Time-aware** — `--period 7d` for weekly averages instead of point-in-time snapshots.
 
 ## Install
 
 ```bash
 # Homebrew
 brew install tanrikuluozlem/burn/burn
+
+# Upgrade
+brew upgrade tanrikuluozlem/burn/burn
 
 # Binary
 curl -L "https://github.com/tanrikuluozlem/burn/releases/latest/download/burn_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz
@@ -145,26 +149,9 @@ burn serve --port 8080 --prometheus http://prometheus:9090 --period 7d
 
 | Command | What you get |
 |---------|-------------|
-| `/burn` | Full cost report — nodes, namespaces, idle cost |
+| `/burn` | Full cost report — nodes, namespaces, idle cost, LB, storage |
 | `/burn ns argocd` | Pod-level breakdown for a namespace |
 | `/burn ask "why is argocd so expensive?"` | AI analysis with kubectl commands |
-
-Example `/burn ask "compare argocd vs kube-system costs"`:
-
-```
-| Metric           | argocd   | kube-system |
-|------------------|----------|-------------|
-| Monthly Cost     | $55.64   | $41.30      |
-| Pod Count        | 4        | 21          |
-| CPU Requested    | 2,000m   | 1,420m      |
-| CPU Actual Usage | ~30m     | ~52m        |
-
-ArgoCD costs 35% more than kube-system despite having only 4 pods vs 21.
-
-Recommended:
-$ kubectl set resources deployment argocd-dex-server -n argocd \
-    --requests=cpu=10m,memory=64Mi --limits=cpu=50m,memory=128Mi
-```
 
 ### Slack setup
 
@@ -173,19 +160,33 @@ $ kubectl set resources deployment argocd-dex-server -n argocd \
 3. Set `SLACK_SIGNING_SECRET` and `ANTHROPIC_API_KEY` environment variables
 4. Expose the server (e.g., ngrok for testing, load balancer for production)
 
+## On-prem and GPU clusters
+
+Burn works with on-premise and GPU clusters. Set your own resource rates:
+
+```bash
+burn analyze \
+  --cpu-price 0.05 \
+  --ram-price 0.008 \
+  --gpu-price 3.00 \
+  --storage-price 0.10
+```
+
+Without custom pricing, cloud-equivalent rates are used as defaults.
+
 ## How it works
 
 ```
 Kubernetes API → nodes, pods, PVCs, services, ingresses
 Prometheus     → actual CPU & memory usage (optional)
-Cloud Pricing  → real VM and storage prices (AWS, Azure, GCP)
+Cloud Pricing  → real VM, storage, and GPU prices (AWS, Azure, GCP)
          ↓
-    Cost Engine → per-namespace breakdown, storage, load balancers, idle detection
+    Cost Engine → compute, storage, load balancers, GPU, idle detection
          ↓
     CLI / Slack / AI Recommendations
 ```
 
-Pricing data for 600+ AWS and 300+ Azure instances is embedded and updated weekly via GitHub Actions. Storage and load balancer costs are fetched from cloud APIs at runtime.
+Pricing for 600+ AWS and 300+ Azure instances is embedded and updated weekly via GitHub Actions. Storage and load balancer costs are fetched from cloud APIs at runtime. GPU nodes are detected automatically and priced via ratio-based cost splitting.
 
 ## Deploy to Kubernetes
 
@@ -243,6 +244,15 @@ spec:
 | `ANTHROPIC_API_KEY` | Claude API key | `--ai`, `ask`, `serve` |
 | `SLACK_WEBHOOK_URL` | Slack webhook URL | `--slack` |
 | `SLACK_SIGNING_SECRET` | Slack app signing secret | `serve` |
+
+| Flag | Description |
+|------|-------------|
+| `--cpu-price` | CPU cost per core per hour (on-prem) |
+| `--ram-price` | RAM cost per GiB per hour (on-prem) |
+| `--gpu-price` | GPU cost per unit per hour (on-prem) |
+| `--storage-price` | Storage cost per GiB per month (on-prem) |
+
+Cloud clusters use real pricing from provider APIs automatically. These flags are for on-premise clusters where pricing is not available from a cloud provider.
 
 ## Development
 

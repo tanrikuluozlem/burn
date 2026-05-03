@@ -36,6 +36,10 @@ var (
 	slackWebhook  string
 	showAllPods   bool
 	period        string
+	cpuPrice      float64
+	ramPrice      float64
+	gpuPrice      float64
+	storagePrice  float64
 )
 
 var analyzeCmd = &cobra.Command{
@@ -57,6 +61,10 @@ func init() {
 	f.StringVar(&slackWebhook, "slack-webhook", "", "Slack webhook URL (or set SLACK_WEBHOOK_URL)")
 	f.BoolVar(&showAllPods, "all", false, "show all pods (default: top 5 wasteful)")
 	f.StringVar(&period, "period", "", "analysis period (e.g. 1h, 7d, 30d)")
+	f.Float64Var(&cpuPrice, "cpu-price", 0, "custom CPU price per core per hour (on-prem)")
+	f.Float64Var(&ramPrice, "ram-price", 0, "custom RAM price per GiB per hour (on-prem)")
+	f.Float64Var(&gpuPrice, "gpu-price", 0, "custom GPU price per unit per hour (on-prem)")
+	f.Float64Var(&storagePrice, "storage-price", 0, "custom storage price per GiB per month (on-prem)")
 
 	rootCmd.AddCommand(analyzeCmd)
 }
@@ -85,6 +93,23 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Custom pricing for on-prem nodes
+	if cpuPrice > 0 || ramPrice > 0 || gpuPrice > 0 || storagePrice > 0 {
+		cp := &pricing.CustomPricing{
+			CPUCostPerCoreHr:    cpuPrice,
+			RAMCostPerGiBHr:     ramPrice,
+			GPUCostPerHr:        gpuPrice,
+			StoragePricePerGiBMo: storagePrice,
+		}
+		if cp.CPUCostPerCoreHr == 0 {
+			cp.CPUCostPerCoreHr = pricing.DefaultCPUCostPerCoreHr
+		}
+		if cp.RAMCostPerGiBHr == 0 {
+			cp.RAMCostPerGiBHr = pricing.DefaultRAMCostPerGiBHr
+		}
+		pp.SetCustomPricing(cp)
+	}
+
 	info, err := coll.Collect(ctx)
 	if err != nil {
 		return err
@@ -101,6 +126,29 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		return outputJSON(report)
 	default:
 		outputTable(report)
+	}
+
+	// On-prem pricing notice
+	if cpuPrice == 0 && ramPrice == 0 {
+		hasOnPrem := false
+		hasGPU := false
+		for _, node := range info.Nodes {
+			if node.CloudProvider == collector.CloudUnknown {
+				hasOnPrem = true
+			}
+			if node.GPUCount > 0 && gpuPrice == 0 {
+				hasGPU = true
+			}
+		}
+		if hasOnPrem {
+			fmt.Println("\nℹ On-prem nodes detected. For accurate costs, set your rates:")
+			fmt.Println("  --cpu-price <$/core/hr> --ram-price <$/GiB/hr>")
+			fmt.Println("  Without custom pricing, cloud-equivalent rates are used.")
+		}
+		if hasGPU {
+			fmt.Println("\nℹ GPU detected but price unknown. GPU cost excluded.")
+			fmt.Println("  Set GPU price: --gpu-price <$/GPU/hr>")
+		}
 	}
 
 	// Get AI recommendations if requested

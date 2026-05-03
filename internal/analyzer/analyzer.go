@@ -177,6 +177,8 @@ func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInf
 		PodCount:        len(node.Pods),
 		CPUCostPerCore:  np.CPUCostPerCore,
 		RAMCostPerGiB:   np.RAMCostPerGiB,
+		GPUCostPerUnit:  np.GPUCostPerUnit,
+		GPUCount:        node.GPUCount,
 		CPURequested:    cpuRequested,
 		MemRequested:    memRequested,
 		IdleCostHourly:  idleCostHourly,
@@ -224,7 +226,8 @@ func calculatePodEfficiencies(pods []collector.PodInfo, np *pricing.NodePricing,
 		// Per-resource cost
 		cpuHourlyCost := cpuCores * np.CPUCostPerCore
 		ramHourlyCost := ramGiB * np.RAMCostPerGiB
-		podHourlyCost := cpuHourlyCost + ramHourlyCost
+		gpuHourlyCost := float64(pod.GPURequest) * np.GPUCostPerUnit
+		podHourlyCost := cpuHourlyCost + ramHourlyCost + gpuHourlyCost
 
 		result = append(result, PodEfficiency{
 			Name:           pod.Name,
@@ -238,6 +241,8 @@ func calculatePodEfficiencies(pods []collector.PodInfo, np *pricing.NodePricing,
 			MonthlyCost:    podHourlyCost * hoursPerMonth,
 			CPUCost:        cpuHourlyCost * hoursPerMonth,
 			RAMCost:        ramHourlyCost * hoursPerMonth,
+			GPUCost:        gpuHourlyCost * hoursPerMonth,
+			GPURequest:     pod.GPURequest,
 			CPUP95Usage:    pod.CPUP95Usage,
 			MemoryP95Usage: pod.MemoryP95Usage,
 		})

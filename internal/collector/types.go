@@ -23,6 +23,8 @@ type NodeInfo struct {
 	CPUUsage              float64
 	MemoryUsage           int64
 	NetworkEgressBytesPerSec float64
+	GPUCount              int64
+	GPUType               string // e.g. "Tesla-T4", "A100"
 	IsSpot                bool
 	Labels         map[string]string
 	Pods           []PodInfo
@@ -35,6 +37,7 @@ type PodInfo struct {
 	CPULimit       int64
 	MemoryRequest  int64
 	MemoryLimit    int64
+	GPURequest     int64 // nvidia.com/gpu
 	CPUUsage       float64
 	MemoryUsage    int64
 	CPUP95Usage    float64 // p95 CPU usage in cores (over analysis period)

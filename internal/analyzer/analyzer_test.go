@@ -26,6 +26,15 @@ func (m *mockPricing) GetHourlyPriceForNode(_ context.Context, _ collector.NodeI
 }
 
 func (m *mockPricing) GetNodePricing(_ context.Context, node collector.NodeInfo) (*pricing.NodePricing, error) {
+	if node.GPUCount > 0 {
+		cpuPerCore, ramPerGiB, gpuPerUnit := pricing.SplitNodeCostWithGPU(m.price, node.CPUAllocatable, node.MemAllocatable, node.GPUCount)
+		return &pricing.NodePricing{
+			HourlyTotal:    m.price,
+			CPUCostPerCore: cpuPerCore,
+			RAMCostPerGiB:  ramPerGiB,
+			GPUCostPerUnit: gpuPerUnit,
+		}, nil
+	}
 	cpuPerCore, ramPerGiB := pricing.SplitNodeCost(m.price, node.CPUAllocatable, node.MemAllocatable)
 	return &pricing.NodePricing{
 		HourlyTotal:    m.price,

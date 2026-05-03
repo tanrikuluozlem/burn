@@ -8,9 +8,10 @@ import (
 )
 
 type CloudPricingProvider struct {
-	aws      *AWSProvider
-	azure    *AzureProvider
-	fallback *StaticProvider
+	aws           *AWSProvider
+	azure         *AzureProvider
+	fallback      *StaticProvider
+	customPricing *CustomPricing
 }
 
 func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error) {
@@ -23,6 +24,10 @@ func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error)
 		azure:    NewAzureProvider(),
 		fallback: NewStaticProvider(),
 	}, nil
+}
+
+func (p *CloudPricingProvider) SetCustomPricing(cp *CustomPricing) {
+	p.customPricing = cp
 }
 
 func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
@@ -124,10 +129,34 @@ func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType,
 }
 
 func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collector.NodeInfo) (*NodePricing, error) {
+	// Custom pricing override (on-prem)
+	if p.customPricing != nil && node.CloudProvider == collector.CloudUnknown {
+		np := &NodePricing{
+			CPUCostPerCore: p.customPricing.CPUCostPerCoreHr,
+			RAMCostPerGiB:  p.customPricing.RAMCostPerGiBHr,
+			GPUCostPerUnit: p.customPricing.GPUCostPerHr,
+		}
+		cpuCores := float64(node.CPUAllocatable) / 1000.0
+		ramGiB := float64(node.MemAllocatable) / (1024 * 1024 * 1024)
+		np.HourlyTotal = np.CPUCostPerCore*cpuCores + np.RAMCostPerGiB*ramGiB + np.GPUCostPerUnit*float64(node.GPUCount)
+		return np, nil
+	}
+
 	hourly, err := p.GetHourlyPriceForNode(ctx, node)
 	if err != nil {
 		return nil, err
 	}
+
+	if node.GPUCount > 0 {
+		cpuPerCore, ramPerGiB, gpuPerUnit := SplitNodeCostWithGPU(hourly, node.CPUAllocatable, node.MemAllocatable, node.GPUCount)
+		return &NodePricing{
+			HourlyTotal:    hourly,
+			CPUCostPerCore: cpuPerCore,
+			RAMCostPerGiB:  ramPerGiB,
+			GPUCostPerUnit: gpuPerUnit,
+		}, nil
+	}
+
 	cpuPerCore, ramPerGiB := SplitNodeCost(hourly, node.CPUAllocatable, node.MemAllocatable)
 	return &NodePricing{
 		HourlyTotal:    hourly,
@@ -137,6 +166,11 @@ func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collecto
 }
 
 func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) float64 {
+	// Custom pricing override
+	if p.customPricing != nil && p.customPricing.StoragePricePerGiBMo > 0 {
+		return p.customPricing.StoragePricePerGiBMo
+	}
+
 	region := p.fallback.region
 
 	// AWS EBS — API first

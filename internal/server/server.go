@@ -201,6 +201,15 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 		summary += fmt.Sprintf("\n*Total: $%.0f/mo*", report.MonthlyCost)
 	}
 
+	// Storage
+	if len(report.PVCosts) > 0 {
+		summary += "\n\n*Storage:*"
+		for _, pv := range report.PVCosts {
+			summary += fmt.Sprintf("\n• `%s` (%s) — %s %.0fGi — $%.0f/mo",
+				pv.Name, pv.Namespace, pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
+		}
+	}
+
 	// Load Balancers
 	if len(report.LBCosts) > 0 {
 		summary += "\n\n*Load Balancers:*"

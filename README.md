@@ -21,10 +21,7 @@ NAMESPACE            PODS  CPU REQ→USED  MEM REQ→USED   COST/MO
 argocd               4     2.0 → 30m     2.0Gi → 393Mi  $56
 amazon-cloudwatch    11    1.6 → 82m     829Mi → 1.3Gi  $44
 kube-system          21    1.4 → 52m     1.6Gi → 757Mi  $41
-app-api-qa           3     600m → 5m     768Mi → 91Mi   $17
-app-api-dev          3     600m → 4m     768Mi → 197Mi  $17
-app-api-prod         2     400m → 4m     512Mi → 17Mi   $11
-app-web-prod         2     400m → <1m    512Mi → 9Mi    $11
+...and 7 more namespaces
 Idle (unallocated)                                     $117
 ─────────────────────────────────────────────────────────
 Total                                                  $350
@@ -40,7 +37,7 @@ Compute:         $350
 Storage:         $0
 Load Balancers:  $16
 Network:         $0
-Total:           $367
+Total:           $366
 ```
 
 No agent to deploy. No dashboard to maintain. No YAML to configure. Just install and run.

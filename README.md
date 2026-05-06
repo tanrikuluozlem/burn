@@ -61,7 +61,8 @@ brew install tanrikuluozlem/burn/burn
 brew upgrade tanrikuluozlem/burn/burn
 
 # Binary
-curl -L "https://github.com/tanrikuluozlem/burn/releases/latest/download/burn_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz
+VERSION=$(curl -s https://api.github.com/repos/tanrikuluozlem/burn/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d 'v') && \
+curl -L "https://github.com/tanrikuluozlem/burn/releases/latest/download/burn_${VERSION}_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz
 
 # Docker
 docker pull ghcr.io/tanrikuluozlem/burn:latest

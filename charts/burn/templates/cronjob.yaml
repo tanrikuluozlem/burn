@@ -23,9 +23,18 @@ spec:
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               args:
-                - report
+                - analyze
+                - --slack
+                {{- if .Values.prometheus.url }}
+                - --prometheus
+                - {{ .Values.prometheus.url | quote }}
+                {{- end }}
                 {{- if .Values.report.includeAI }}
                 - --ai
+                {{- end }}
+                {{- if .Values.report.period }}
+                - --period
+                - {{ .Values.report.period | quote }}
                 {{- end }}
               env:
                 - name: SLACK_WEBHOOK_URL
@@ -39,10 +48,6 @@ spec:
                     secretKeyRef:
                       name: {{ .Values.secrets.existingSecret }}
                       key: {{ .Values.secrets.anthropicApiKey }}
-                {{- end }}
-                {{- if .Values.prometheus.url }}
-                - name: PROMETHEUS_URL
-                  value: {{ .Values.prometheus.url | quote }}
                 {{- end }}
               resources:
                 {{- toYaml .Values.resources | nindent 16 }}

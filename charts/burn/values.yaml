@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/tanrikuluozlem/burn
-  tag: v0.2.7
+  tag: v0.3.0
   pullPolicy: IfNotPresent
 
 serviceAccount:
@@ -19,6 +19,7 @@ schedule: "0 9 * * *"
 
 report:
   includeAI: true
+  period: "7d"
 
 prometheus:
   url: "http://prometheus-kube-prometheus-prometheus.monitoring:9090"

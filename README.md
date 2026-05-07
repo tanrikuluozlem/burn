@@ -45,10 +45,11 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 ## Why burn
 
 - **Zero setup** — `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
-- **Full cost coverage** — Compute, storage, load balancers, and GPU costs from cloud provider APIs.
+- **Full cost coverage** — Compute, storage, load balancers, and GPU costs. Fetches real-time pricing from AWS and Azure APIs.
 - **AI-powered** — Ask questions in plain English, get kubectl commands you can copy-paste.
 - **Slack-native** — `/burn` for instant cost reports. `/burn ask "..."` for AI analysis.
 - **Cloud + on-prem** — Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters.
+- **Ingress LB detection** — Detects load balancers from both Services and Ingress resources, with hostname deduplication.
 - **Time-aware** — `--period 7d` for weekly averages instead of point-in-time snapshots.
 
 ## Install
@@ -250,7 +251,7 @@ spec:
 | `--gpu-price` | GPU cost per unit per hour (on-prem) |
 | `--storage-price` | Storage cost per GiB per month (on-prem) |
 
-Cloud clusters use real pricing from provider APIs automatically. These flags are for on-premise clusters where pricing is not available from a cloud provider.
+Cloud clusters use real pricing automatically. These flags are for on-premise clusters where pricing is not available from a cloud provider.
 
 ## Development
 

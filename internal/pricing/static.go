@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/tanrikuluozlem/burn/internal/collector"
@@ -33,6 +34,11 @@ func (p *StaticProvider) GetHourlyPrice(_ context.Context, instanceType, region 
 	if !ok {
 		// Try to estimate price based on instance family
 		price = estimatePrice(instanceType)
+		slog.Warn("using estimated pricing for unknown instance type",
+			"instance_type", instanceType,
+			"region", region,
+			"estimated_price", price,
+		)
 	}
 
 	if isSpot {

@@ -317,6 +317,17 @@ func detectCloudProvider(labels map[string]string) CloudProvider {
 	if _, ok := labels["kubernetes.azure.com/cluster"]; ok {
 		return CloudAzure
 	}
+	// Karpenter — detect cloud from instance type prefix or provider-specific labels
+	if _, ok := labels["karpenter.sh/nodepool"]; ok {
+		if _, ok := labels["karpenter.k8s.aws/instance-family"]; ok {
+			return CloudAWS
+		}
+		if _, ok := labels["karpenter.azure.com/sku-family"]; ok {
+			return CloudAzure
+		}
+		// Karpenter on AWS is most common, default to AWS
+		return CloudAWS
+	}
 	return CloudUnknown
 }
 

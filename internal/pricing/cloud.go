@@ -12,6 +12,7 @@ type CloudPricingProvider struct {
 	azure         *AzureProvider
 	fallback      *StaticProvider
 	customPricing *CustomPricing
+	detectedCloud collector.CloudProvider
 }
 
 func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error) {
@@ -34,6 +35,11 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 	// Pass region to fallback for region-aware pricing
 	if node.Region != "" {
 		p.fallback.SetRegion(node.Region)
+	}
+
+	// Remember cloud provider for LB pricing
+	if p.detectedCloud == "" && node.CloudProvider != collector.CloudUnknown {
+		p.detectedCloud = node.CloudProvider
 	}
 
 	var cloudName string
@@ -197,7 +203,14 @@ func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) f
 }
 
 func (p *CloudPricingProvider) GetLoadBalancerPricePerHour() float64 {
-	return p.fallback.GetLoadBalancerPricePerHour()
+	switch p.detectedCloud {
+	case collector.CloudAzure:
+		return 0.005 // Azure Standard public IP (per-service cost in AKS shared LB)
+	case collector.CloudGCP:
+		return 0.025 // GCP forwarding rule
+	default:
+		return 0.0225 // AWS ALB/NLB (default)
+	}
 }
 
 func (p *CloudPricingProvider) GetNetworkEgressPricePerGiB() float64 {

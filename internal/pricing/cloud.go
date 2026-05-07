@@ -91,11 +91,15 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 	// Embedded DB fallback
 	if cloudName != "" {
 		if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
+			slog.Debug("using embedded pricing (cloud API unavailable)",
+				"instance_type", node.InstanceType, "region", node.Region)
 			return price, nil
 		}
 	}
 
 	// Static fallback
+	slog.Warn("using static fallback pricing (cloud API and embedded DB unavailable)",
+		"instance_type", node.InstanceType, "region", node.Region)
 	return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, false)
 }
 

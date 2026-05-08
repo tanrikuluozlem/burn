@@ -185,7 +185,7 @@ Cloud Pricing  → real VM, storage, and GPU prices (AWS, Azure, GCP)
     CLI / Slack / AI Recommendations
 ```
 
-Pricing for 600+ AWS and 300+ Azure instances is embedded and updated weekly via GitHub Actions. Storage and load balancer costs are fetched from cloud APIs at runtime. GPU nodes are detected automatically and priced via ratio-based cost splitting.
+Pricing for 600+ AWS and 300+ Azure instances is embedded and updated weekly via GitHub Actions. Storage costs are fetched from cloud APIs at runtime. Load balancer costs reflect the per-unit hourly rate for each cloud provider. Usage-based charges (data processing, LCU) depend on traffic volume and are not included. GPU nodes are detected automatically and priced via ratio-based cost splitting.
 
 ## Deploy to Kubernetes
 

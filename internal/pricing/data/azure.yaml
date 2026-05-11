@@ -1,6 +1,6 @@
 # Azure VM Instance Pricing (Linux, On-Demand)
 # Source: https://azure.microsoft.com/pricing/details/virtual-machines/linux/
-# Auto-generated: 2026-05-04
+# Auto-generated: 2026-05-11
 # DO NOT EDIT MANUALLY - run 'go run scripts/update-pricing.go azure'
 
 australiaeast:

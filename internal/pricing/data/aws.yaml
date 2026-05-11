@@ -1,6 +1,6 @@
 # AWS EC2 Instance Pricing (Linux, On-Demand)
 # Source: https://aws.amazon.com/ec2/pricing/on-demand/
-# Auto-generated: 2026-05-04
+# Auto-generated: 2026-05-11
 # DO NOT EDIT MANUALLY - run 'go run scripts/update-pricing.go aws'
 
 ap-northeast-1:
@@ -111,7 +111,6 @@ ap-south-1:
     r5a.large: 0.072
     r5a.xlarge: 0.143
     r5.2xlarge: 0.52
-    r5.large: 0.13
     r5.xlarge: 0.26
     r6i.large: 0.13
     r6i.xlarge: 0.26

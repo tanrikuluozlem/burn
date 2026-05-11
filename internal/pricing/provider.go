@@ -26,7 +26,7 @@ type Provider interface {
 	GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error)
 	GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error)
 	GetNodePricing(ctx context.Context, node collector.NodeInfo) (*NodePricing, error)
-	GetStoragePricePerGiBMonth(storageClass string) float64
+	GetStoragePricePerGiBMonth(ctx context.Context, storageClass string) float64
 	GetLoadBalancerPricePerHour() float64
 	GetNetworkEgressPricePerGiB() float64
 }

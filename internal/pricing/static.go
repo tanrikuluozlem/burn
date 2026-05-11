@@ -92,7 +92,7 @@ var storagePrices = map[string]float64{
 	"default": 0.04,
 }
 
-func (p *StaticProvider) GetStoragePricePerGiBMonth(storageClass string) float64 {
+func (p *StaticProvider) GetStoragePricePerGiBMonth(_ context.Context, storageClass string) float64 {
 	if price, ok := storagePrices[storageClass]; ok {
 		return price
 	}

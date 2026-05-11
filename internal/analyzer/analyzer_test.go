@@ -43,7 +43,7 @@ func (m *mockPricing) GetNodePricing(_ context.Context, node collector.NodeInfo)
 	}, nil
 }
 
-func (m *mockPricing) GetStoragePricePerGiBMonth(storageClass string) float64 { return 0.10 }
+func (m *mockPricing) GetStoragePricePerGiBMonth(_ context.Context, storageClass string) float64 { return 0.10 }
 func (m *mockPricing) GetLoadBalancerPricePerHour() float64                    { return 0.0225 }
 func (m *mockPricing) GetNetworkEgressPricePerGiB() float64                    { return 0.01 }
 
@@ -534,7 +534,7 @@ func TestPVCostCalculation(t *testing.T) {
 		{Name: "redis-data", Namespace: "cache", StorageClass: "gp2", RequestedBytes: 20 * 1024 * 1024 * 1024},
 	}
 
-	costs := calculatePVCosts(pvcs, &mockPricing{price: 0.10})
+	costs := calculatePVCosts(context.Background(), pvcs, &mockPricing{price: 0.10})
 
 	if len(costs) != 2 {
 		t.Fatalf("expected 2 PV costs, got %d", len(costs))

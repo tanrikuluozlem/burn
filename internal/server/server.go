@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tanrikuluozlem/burn/internal/advisor"
@@ -26,10 +27,14 @@ type Config struct {
 }
 
 type Server struct {
-	config     Config
-	httpServer *http.Server
-	collector  *collector.Collector
-	advisor    *advisor.Advisor
+	config      Config
+	httpServer  *http.Server
+	collector   *collector.Collector
+	advisor     *advisor.Advisor
+	wg          sync.WaitGroup
+	activeReqs  int
+	reqMu       sync.Mutex
+	maxActiveReqs int
 }
 
 func New(cfg Config) (*Server, error) {
@@ -39,9 +44,10 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		config:    cfg,
-		collector: coll,
-		advisor:   advisor.New(cfg.APIKey),
+		config:        cfg,
+		collector:     coll,
+		advisor:       advisor.New(cfg.APIKey),
+		maxActiveReqs: 5,
 	}
 
 	mux := http.NewServeMux()
@@ -65,7 +71,22 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.httpServer.Shutdown(ctx)
+	// Shutdown HTTP server (stops accepting new requests)
+	if err := s.httpServer.Shutdown(ctx); err != nil {
+		return err
+	}
+	// Wait for background goroutines to finish
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +123,20 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rate limit: reject if too many active requests
+	s.reqMu.Lock()
+	if s.activeReqs >= s.maxActiveReqs {
+		s.reqMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"response_type": "ephemeral",
+			"text":          "Too many requests. Please try again in a moment.",
+		})
+		return
+	}
+	s.activeReqs++
+	s.reqMu.Unlock()
+
 	// Immediate acknowledgment
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -109,8 +144,17 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 		"text":          "Analyzing cluster...",
 	})
 
-	// Process in background
-	go s.processSlackCommand(text, responseURL)
+	// Process in background with goroutine tracking
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			s.reqMu.Lock()
+			s.activeReqs--
+			s.reqMu.Unlock()
+		}()
+		s.processSlackCommand(text, responseURL)
+	}()
 }
 
 func (s *Server) processSlackCommand(text, responseURL string) {

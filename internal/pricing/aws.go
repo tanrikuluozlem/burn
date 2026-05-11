@@ -76,6 +76,10 @@ func (p *AWSProvider) GetHourlyPrice(ctx context.Context, instanceType, region s
 	}
 
 	p.mu.Lock()
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
+		p.mu.Unlock()
+		return c.price, nil
+	}
 	p.cache[key] = cachedPrice{price: price, expiresAt: time.Now().Add(time.Hour)}
 	p.mu.Unlock()
 
@@ -173,6 +177,10 @@ func (p *AWSProvider) getEC2Client(ctx context.Context, region string) (*ec2.Cli
 
 	c := ec2.NewFromConfig(cfg)
 	p.mu.Lock()
+	if existing, ok := p.ec2Clients[region]; ok {
+		p.mu.Unlock()
+		return existing, nil
+	}
 	p.ec2Clients[region] = c
 	p.mu.Unlock()
 	return c, nil

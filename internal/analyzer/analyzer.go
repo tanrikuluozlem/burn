@@ -86,7 +86,7 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 	report.AllPods = allPods
 
 	// PV costs
-	pvCosts := calculatePVCosts(info.PVCs, a.pricing)
+	pvCosts := calculatePVCosts(ctx, info.PVCs, a.pricing)
 	report.PVCosts = pvCosts
 	for _, pv := range pvCosts {
 		report.TotalPVCost += pv.MonthlyCost
@@ -112,8 +112,15 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 	report.TotalMonthlyCost = report.MonthlyCost + report.TotalPVCost + report.TotalLBCost + report.TotalNetworkCost
 
 	if hasPrometheus && len(allPods) > 0 {
-		sorted := make([]PodEfficiency, len(allPods))
-		copy(sorted, allPods)
+		// Filter pods with valid CPU efficiency (request > 0)
+		var validPods []PodEfficiency
+		for _, p := range allPods {
+			if p.CPUEfficiency >= 0 {
+				validPods = append(validPods, p)
+			}
+		}
+		sorted := make([]PodEfficiency, len(validPods))
+		copy(sorted, validPods)
 		sort.Slice(sorted, func(i, j int) bool {
 			return sorted[i].CPUEfficiency < sorted[j].CPUEfficiency
 		})
@@ -136,6 +143,10 @@ func hasPrometheusMetrics(nodes []collector.NodeInfo) bool {
 }
 
 func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInfo, hasPrometheus bool) (NodeCost, []PodEfficiency, error) {
+	if node.CPUAllocatable <= 0 || node.MemAllocatable <= 0 {
+		return NodeCost{Name: node.Name, InstanceType: node.InstanceType}, nil, nil
+	}
+
 	np, err := a.pricing.GetNodePricing(ctx, node)
 	if err != nil {
 		return NodeCost{}, nil, err
@@ -199,14 +210,14 @@ func calculatePodEfficiencies(pods []collector.PodInfo, np *pricing.NodePricing,
 		}
 
 		// CPU efficiency: usage (cores) / request (millicores converted to cores)
-		var cpuEff float64
+		cpuEff := -1.0
 		if pod.CPURequest > 0 {
 			cpuRequestCores := float64(pod.CPURequest) / 1000.0
 			cpuEff = pod.CPUUsage / cpuRequestCores
 		}
 
 		// Memory efficiency: usage / request
-		var memEff float64
+		memEff := -1.0
 		if pod.MemoryRequest > 0 {
 			memEff = float64(pod.MemoryUsage) / float64(pod.MemoryRequest)
 		}
@@ -316,14 +327,14 @@ func recommendationFor(nc NodeCost) string {
 	return "Review workload placement"
 }
 
-func calculatePVCosts(pvcs []collector.PVCInfo, p pricing.Provider) []PVCost {
+func calculatePVCosts(ctx context.Context, pvcs []collector.PVCInfo, p pricing.Provider) []PVCost {
 	var result []PVCost
 	for _, pvc := range pvcs {
 		gib := float64(pvc.RequestedBytes) / (1024 * 1024 * 1024)
 		if gib <= 0 {
 			continue
 		}
-		pricePerMonth := p.GetStoragePricePerGiBMonth(pvc.StorageClass)
+		pricePerMonth := p.GetStoragePricePerGiBMonth(ctx, pvc.StorageClass)
 		result = append(result, PVCost{
 			Name:         pvc.Name,
 			Namespace:    pvc.Namespace,

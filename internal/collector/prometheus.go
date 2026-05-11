@@ -72,8 +72,9 @@ func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResul
 	}
 
 	var result promResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&result); err != nil {
-		return nil, err
+	limitedReader := io.LimitReader(resp.Body, maxResponseSize)
+	if err := json.NewDecoder(limitedReader).Decode(&result); err != nil {
+		return nil, fmt.Errorf("prometheus decode error (response may exceed %dMB limit): %w", maxResponseSize/(1024*1024), err)
 	}
 
 	if result.Status != "success" {

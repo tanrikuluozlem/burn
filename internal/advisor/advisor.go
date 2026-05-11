@@ -183,7 +183,7 @@ func buildPrompt(report *analyzer.CostReport) string {
 	if savings.SpotConversion != nil && savings.SpotConversion.Applicable {
 		savingsInfo += fmt.Sprintf("• Spot: up to $%.0f/month (only stateless workloads)\n", savings.SpotConversion.MonthlySavings)
 	}
-	if savings.NodeConsolidation != nil && savings.NodeConsolidation.Applicable {
+	if savings.NodeConsolidation != nil && savings.NodeConsolidation.Applicable && len(savings.NodeConsolidation.AffectedNodes) > 0 {
 		savingsInfo += fmt.Sprintf("• Consolidation: $%.0f/month (remove %s)\n",
 			savings.NodeConsolidation.MonthlySavings,
 			savings.NodeConsolidation.AffectedNodes[0])

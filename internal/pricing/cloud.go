@@ -175,7 +175,7 @@ func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collecto
 	}, nil
 }
 
-func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) float64 {
+func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(ctx context.Context, storageClass string) float64 {
 	// Custom pricing override
 	if p.customPricing != nil && p.customPricing.StoragePricePerGiBMo > 0 {
 		return p.customPricing.StoragePricePerGiBMo
@@ -185,7 +185,7 @@ func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) f
 
 	// AWS EBS — API first
 	if p.aws != nil && region != "" {
-		price, err := p.aws.GetEBSPrice(context.Background(), storageClass, region)
+		price, err := p.aws.GetEBSPrice(ctx, storageClass, region)
 		if err == nil && price > 0 {
 			return price
 		}
@@ -193,13 +193,13 @@ func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(storageClass string) f
 
 	// Azure Managed Disk — API first
 	if p.azure != nil && region != "" {
-		price, err := p.azure.GetDiskPrice(context.Background(), storageClass, region)
+		price, err := p.azure.GetDiskPrice(ctx, storageClass, region)
 		if err == nil && price > 0 {
 			return price
 		}
 	}
 
-	return p.fallback.GetStoragePricePerGiBMonth(storageClass)
+	return p.fallback.GetStoragePricePerGiBMonth(ctx, storageClass)
 }
 
 func (p *CloudPricingProvider) GetLoadBalancerPricePerHour() float64 {

@@ -42,6 +42,10 @@ func (p *AzureProvider) GetHourlyPrice(ctx context.Context, vmSize, region strin
 	}
 
 	p.mu.Lock()
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
+		p.mu.Unlock()
+		return c.price, nil
+	}
 	p.cache[key] = cachedPrice{price: price, expiresAt: time.Now().Add(time.Hour)}
 	p.mu.Unlock()
 	return price, nil

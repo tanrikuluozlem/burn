@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -260,6 +261,81 @@ func (p *AWSProvider) GetEBSPrice(ctx context.Context, volumeType, region string
 	}
 
 	p.mu.Lock()
+	p.cache[key] = cachedPrice{price: price, expiresAt: time.Now().Add(time.Hour)}
+	p.mu.Unlock()
+
+	return price, nil
+}
+
+func (p *AWSProvider) GetLBPrice(ctx context.Context, region string) (float64, error) {
+	key := fmt.Sprintf("lb:%s", region)
+
+	p.mu.RLock()
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
+		p.mu.RUnlock()
+		return c.price, nil
+	}
+	p.mu.RUnlock()
+
+	regionCode := awsRegionToCode(region)
+
+	input := &pricing.GetProductsInput{
+		ServiceCode: aws.String("AWSELB"),
+		Filters: []types.Filter{
+			{
+				Type:  types.FilterTypeTermMatch,
+				Field: aws.String("productFamily"),
+				Value: aws.String("Load Balancer-Application"),
+			},
+			{
+				Type:  types.FilterTypeTermMatch,
+				Field: aws.String("location"),
+				Value: aws.String(regionCode),
+			},
+			{
+				Type:  types.FilterTypeTermMatch,
+				Field: aws.String("group"),
+				Value: aws.String("ELB:Balancing"),
+			},
+		},
+		MaxResults: aws.Int32(10),
+	}
+	result, err := p.pricingClient.GetProducts(ctx, input)
+	if err != nil {
+		return 0, err
+	}
+
+	// Find the base hourly rate (LoadBalancerUsage, not LCU or Outposts)
+	var price float64
+	for _, item := range result.PriceList {
+		var data struct {
+			Product struct {
+				Attributes struct {
+					UsageType string `json:"usagetype"`
+				} `json:"attributes"`
+			} `json:"product"`
+		}
+		if err := json.Unmarshal([]byte(item), &data); err != nil {
+			continue
+		}
+		ut := data.Product.Attributes.UsageType
+		if strings.HasSuffix(ut, "LoadBalancerUsage") && !strings.Contains(ut, "LCU") && !strings.Contains(ut, "Outposts") && !strings.Contains(ut, "TS-") {
+			p, err := parseOnDemandPrice(item)
+			if err == nil {
+				price = p
+				break
+			}
+		}
+	}
+	if price == 0 {
+		return 0, fmt.Errorf("no LB pricing for %s", region)
+	}
+
+	p.mu.Lock()
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
+		p.mu.Unlock()
+		return c.price, nil
+	}
 	p.cache[key] = cachedPrice{price: price, expiresAt: time.Now().Add(time.Hour)}
 	p.mu.Unlock()
 

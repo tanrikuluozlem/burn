@@ -204,12 +204,20 @@ func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(ctx context.Context, s
 
 func (p *CloudPricingProvider) GetLoadBalancerPricePerHour() float64 {
 	switch p.detectedCloud {
+	case collector.CloudAWS:
+		// Try live API first, fallback to default
+		if p.aws != nil && p.fallback.region != "" {
+			if price, err := p.aws.GetLBPrice(context.Background(), p.fallback.region); err == nil {
+				return price
+			}
+		}
+		return 0.0225 // AWS ALB/NLB fallback (us-east-1)
 	case collector.CloudAzure:
 		return 0.005 // Azure Standard public IP (per-service cost in AKS shared LB)
 	case collector.CloudGCP:
 		return 0.025 // GCP forwarding rule
 	default:
-		return 0.0225 // AWS ALB/NLB (default)
+		return 0.0225 // default
 	}
 }
 

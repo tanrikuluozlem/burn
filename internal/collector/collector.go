@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -167,51 +168,103 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 }
 
 func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
-	// Fetch node metrics
-	nodeCPU, err := c.prometheus.GetNodeCPUUsage(ctx)
-	if err != nil {
-		log.Printf("warning: failed to get node CPU metrics: %v", err)
-	}
-	nodeMem, err := c.prometheus.GetNodeMemoryUsage(ctx)
-	if err != nil {
-		log.Printf("warning: failed to get node memory metrics: %v", err)
+	// Each query writes to its own variable — no shared writes, no mutex needed
+	var (
+		nodeCPU   map[string]float64
+		nodeMem   map[string]int64
+		nodeNet   map[string]float64
+		podCPU    map[string]float64
+		podMem    map[string]int64
+		podCPUP95 map[string]float64
+		podMemP95 map[string]int64
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		var err error
+		nodeCPU, err = c.prometheus.GetNodeCPUUsage(gctx)
+		if err != nil {
+			log.Printf("warning: failed to get node CPU metrics: %v", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		var err error
+		nodeMem, err = c.prometheus.GetNodeMemoryUsage(gctx)
+		if err != nil {
+			log.Printf("warning: failed to get node memory metrics: %v", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		var err error
+		nodeNet, err = c.prometheus.GetNodeNetworkEgress(gctx)
+		if err != nil {
+			log.Printf("warning: failed to get node network metrics: %v", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		var err error
+		podCPU, err = c.prometheus.GetPodCPUUsage(gctx)
+		if err != nil {
+			log.Printf("warning: failed to get pod CPU metrics: %v", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		var err error
+		podMem, err = c.prometheus.GetPodMemoryUsage(gctx)
+		if err != nil {
+			log.Printf("warning: failed to get pod memory metrics: %v", err)
+		}
+		return nil
+	})
+
+	if c.prometheus.period != "" {
+		g.Go(func() error {
+			var err error
+			podCPUP95, err = c.prometheus.GetPodCPUUsageP95(gctx)
+			if err != nil {
+				log.Printf("warning: failed to get pod CPU p95 metrics: %v", err)
+			}
+			return nil
+		})
+
+		g.Go(func() error {
+			var err error
+			podMemP95, err = c.prometheus.GetPodMemoryUsageP95(gctx)
+			if err != nil {
+				log.Printf("warning: failed to get pod memory p95 metrics: %v", err)
+			}
+			return nil
+		})
 	}
 
-	// Fetch network egress
-	nodeNet, err := c.prometheus.GetNodeNetworkEgress(ctx)
-	if err != nil {
-		log.Printf("warning: failed to get node network metrics: %v", err)
-	}
-	netByIP := make(map[string]float64)
-	for k, v := range nodeNet {
-		netByIP[extractIP(k)] = v
-	}
+	_ = g.Wait()
 
-	// Fetch pod metrics
-	podCPU, err := c.prometheus.GetPodCPUUsage(ctx)
-	if err != nil {
-		log.Printf("warning: failed to get pod CPU metrics: %v", err)
-	}
-	podMem, err := c.prometheus.GetPodMemoryUsage(ctx)
-	if err != nil {
-		log.Printf("warning: failed to get pod memory metrics: %v", err)
-	}
-
-	// remap by IP for matching (prometheus uses 10.0.1.5:9100)
+	// Merge results (single-threaded after Wait — no races)
 	cpuByIP := make(map[string]float64)
 	memByIP := make(map[string]int64)
+	netByIP := make(map[string]float64)
 	for k, v := range nodeCPU {
 		cpuByIP[extractIP(k)] = v
 	}
 	for k, v := range nodeMem {
 		memByIP[extractIP(k)] = v
 	}
+	for k, v := range nodeNet {
+		netByIP[extractIP(k)] = v
+	}
 
 	for i := range nodes {
-		// Use InternalIP from Kubernetes node status (works for all clouds)
 		ip := nodes[i].InternalIP
 		if ip == "" {
-			// Fallback for legacy AWS node names (ip-10-0-1-5.ec2.internal)
 			ip = extractIPFromNodeName(nodes[i].Name)
 		}
 		if cpu, ok := cpuByIP[ip]; ok {
@@ -224,7 +277,6 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 			nodes[i].NetworkEgressBytesPerSec = net
 		}
 
-		// Enrich pods on this node
 		for j := range nodes[i].Pods {
 			pod := &nodes[i].Pods[j]
 			key := pod.Namespace + "/" + pod.Name
@@ -234,30 +286,11 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 			if mem, ok := podMem[key]; ok {
 				pod.MemoryUsage = mem
 			}
-		}
-	}
-
-	// Fetch p95 metrics when a period is configured
-	if c.prometheus.period != "" {
-		podCPUP95, err := c.prometheus.GetPodCPUUsageP95(ctx)
-		if err != nil {
-			log.Printf("warning: failed to get pod CPU p95 metrics: %v", err)
-		}
-		podMemP95, err := c.prometheus.GetPodMemoryUsageP95(ctx)
-		if err != nil {
-			log.Printf("warning: failed to get pod memory p95 metrics: %v", err)
-		}
-
-		for i := range nodes {
-			for j := range nodes[i].Pods {
-				pod := &nodes[i].Pods[j]
-				key := pod.Namespace + "/" + pod.Name
-				if cpu, ok := podCPUP95[key]; ok {
-					pod.CPUP95Usage = cpu
-				}
-				if mem, ok := podMemP95[key]; ok {
-					pod.MemoryP95Usage = mem
-				}
+			if cpu, ok := podCPUP95[key]; ok {
+				pod.CPUP95Usage = cpu
+			}
+			if mem, ok := podMemP95[key]; ok {
+				pod.MemoryP95Usage = mem
 			}
 		}
 	}

@@ -7,7 +7,7 @@
 
 Your Kubernetes cluster is burning money. Find out where.
 
-[![demo](https://asciinema.org/a/8ujiH3nRqdwKOliI.svg)](https://asciinema.org/a/8ujiH3nRqdwKOliI)
+[![demo](https://asciinema.org/a/8ujiH3nRqdwKOliI.png)](https://asciinema.org/a/8ujiH3nRqdwKOliI)
 
 No agent to deploy. No dashboard to maintain. No YAML to configure. Just install and run.
 

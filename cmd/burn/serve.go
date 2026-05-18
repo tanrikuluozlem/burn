@@ -62,6 +62,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("SLACK_SIGNING_SECRET not set")
 	}
 
+	if p := os.Getenv("PROMETHEUS_URL"); p != "" {
+		servePrometheus = p
+	}
+
 	srv, err := server.New(server.Config{
 		Port:          servePort,
 		Kubeconfig:    serveKubeconfig,

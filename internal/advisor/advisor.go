@@ -26,8 +26,19 @@ func New(apiKey string) *Advisor {
 	}
 }
 
-func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport) (*Report, error) {
+func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport, focusNamespace ...string) (*Report, error) {
 	prompt := buildPrompt(report)
+	if len(focusNamespace) > 0 && focusNamespace[0] != "" {
+		// Find namespace cost for the focus namespace
+		var nsCost float64
+		for _, ns := range report.Namespaces {
+			if ns.Name == focusNamespace[0] {
+				nsCost = ns.MonthlyCost
+				break
+			}
+		}
+		prompt += fmt.Sprintf("\n\nFOCUS: Analyze only the '%s' namespace (total cost: $%.2f/mo). Give pod-level recommendations for this namespace only. Do NOT recommend node-level changes (spot conversion, node consolidation, node draining). Do NOT include estimated_savings — savings depend on how much the user rightsizes, which varies. Ignore the PRE-CALCULATED SAVINGS section — it is cluster-wide and does not apply here.", focusNamespace[0], nsCost)
+	}
 
 	tool := anthropic.ToolParam{
 		Name:        "provide_recommendations",
@@ -104,7 +115,8 @@ RULES:
 3. Only ONE recommendation gets estimated_savings
 4. Pick ONE strategy: spot OR consolidation (not both)
 5. Reference NAMESPACE data: compare costs, identify over-provisioned namespaces, flag dev/qa vs prod imbalances
-6. Do NOT calculate percentages or dollar values yourself. Only use numbers that appear in the data. If a value is not in the data, do not invent it.`
+6. Do NOT calculate percentages or dollar values yourself. Only use numbers that appear in the data. If a value is not in the data, do not invent it.
+7. When p95 data is available, use it for rightsizing recommendations: recommend request = p95 × 1.5 (50% headroom above peak). Explain why: "p95 CPU over the analysis period is Xm, so we recommend Ym request (1.5x p95 headroom)". This is more trustworthy than arbitrary values.`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",
@@ -156,7 +168,7 @@ func buildPrompt(report *analyzer.CostReport) string {
 		if n.IsSpot {
 			spot = "spot"
 		}
-		nodeSummary += fmt.Sprintf("• %s — %s %s — $%.0f/mo — %.0f%% CPU requested — %.0f%% MEM requested — %.0f%% idle — $%.0f/mo idle cost\n",
+		nodeSummary += fmt.Sprintf("• %s — %s %s — $%.2f/mo — %.0f%% CPU requested — %.0f%% MEM requested — %.0f%% idle — $%.2f/mo idle cost\n",
 			n.Name, n.InstanceType, spot, n.MonthlyPrice,
 			n.CPURequested*100, n.MemRequested*100, n.IdlePercent*100, n.IdleCostMonthly)
 	}
@@ -164,16 +176,24 @@ func buildPrompt(report *analyzer.CostReport) string {
 	// Pre-calculated namespace summary
 	nsSummary := "\nNAMESPACE SUMMARY (use these exact values):\n"
 	for _, ns := range report.Namespaces {
-		nsSummary += fmt.Sprintf("• %s — %d pods — $%.0f/mo (CPU: $%.0f, RAM: $%.0f)\n",
+		nsSummary += fmt.Sprintf("• %s — %d pods — $%.2f/mo (CPU: $%.2f, RAM: $%.2f)\n",
 			ns.Name, ns.PodCount, ns.MonthlyCost, ns.CPUCost, ns.RAMCost)
 	}
 
-	// Pre-calculated top inefficient pods
+	// Pre-calculated top inefficient pods with p95 data
 	podSummary := "\nTOP INEFFICIENT PODS (use these exact values):\n"
 	for _, p := range report.InefficientPods {
-		podSummary += fmt.Sprintf("• %s/%s — CPU: %dm req, %.2fm used (%.1f%% eff) — MEM: %.0f%% eff — $%.1f/mo\n",
+		p95Info := ""
+		if p.CPUP95Usage > 0 {
+			p95Info = fmt.Sprintf(" — CPU p95: %.2fm", p.CPUP95Usage*1000)
+		}
+		if p.MemoryP95Usage > 0 {
+			p95Info += fmt.Sprintf(" — MEM p95: %dMi", p.MemoryP95Usage/(1024*1024))
+		}
+		podSummary += fmt.Sprintf("• %s/%s — CPU: %dm req, %.2fm used (%.1f%% eff) — MEM: %dMi req, %dMi used (%.0f%% eff)%s — $%.2f/mo\n",
 			p.Namespace, p.Name, p.CPURequest, p.CPUUsage*1000, p.CPUEfficiency*100,
-			p.MemEfficiency*100, p.MonthlyCost)
+			p.MemRequest/(1024*1024), p.MemUsage/(1024*1024), p.MemEfficiency*100,
+			p95Info, p.MonthlyCost)
 	}
 
 	savings := CalculateSavings(report, DefaultSavingsConfig())
@@ -181,18 +201,18 @@ func buildPrompt(report *analyzer.CostReport) string {
 	savingsInfo := "\nPRE-CALCULATED SAVINGS (use these exact values, pick ONE):\n"
 
 	if savings.SpotConversion != nil && savings.SpotConversion.Applicable {
-		savingsInfo += fmt.Sprintf("• Spot: up to $%.0f/month (only stateless workloads)\n", savings.SpotConversion.MonthlySavings)
+		savingsInfo += fmt.Sprintf("• Spot: up to $%.2f/month (only stateless workloads)\n", savings.SpotConversion.MonthlySavings)
 	}
 	if savings.NodeConsolidation != nil && savings.NodeConsolidation.Applicable && len(savings.NodeConsolidation.AffectedNodes) > 0 {
-		savingsInfo += fmt.Sprintf("• Consolidation: $%.0f/month (remove %s)\n",
+		savingsInfo += fmt.Sprintf("• Consolidation: $%.2f/month (remove %s)\n",
 			savings.NodeConsolidation.MonthlySavings,
 			savings.NodeConsolidation.AffectedNodes[0])
 	}
 	if savings.RightSizing != nil && savings.RightSizing.Applicable {
-		savingsInfo += fmt.Sprintf("• Rightsizing: $%.0f/month\n", savings.RightSizing.MonthlySavings)
+		savingsInfo += fmt.Sprintf("• Rightsizing: $%.2f/month\n", savings.RightSizing.MonthlySavings)
 	}
 
-	savingsInfo += fmt.Sprintf("\nUse $%.0f for estimated_savings (best option).\n", savings.TotalSavings())
+	savingsInfo += fmt.Sprintf("\nUse $%.2f for estimated_savings (best option).\n", savings.TotalSavings())
 
 	return fmt.Sprintf("Cluster data:\n%s%s%s%s%s", string(data), nodeSummary, nsSummary, podSummary, savingsInfo)
 }
@@ -217,15 +237,7 @@ func parseToolResponse(resp *anthropic.Message) ([]Recommendation, string, error
 
 // Ask answers natural language questions about the cluster costs
 func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question string) (string, error) {
-	reportJSON, _ := json.MarshalIndent(report, "", "  ")
-
-	prompt := fmt.Sprintf(`Here is the current Kubernetes cluster cost report:
-
-%s
-
-User question: %s
-
-Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, question)
+	prompt := a.buildAskPrompt(report, question)
 
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
@@ -246,6 +258,46 @@ Answer the question based on the cluster data above. Be specific, use actual nod
 	}
 
 	return "", fmt.Errorf("no text response")
+}
+
+// AskStream streams the AI response token by token.
+func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, question string, onText func(string)) (string, error) {
+	prompt := a.buildAskPrompt(report, question)
+
+	stream := a.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+		Model:     a.model,
+		MaxTokens: 1024,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		},
+		System: []anthropic.TextBlockParam{{Text: askSystemPrompt}},
+	})
+
+	var full string
+	for stream.Next() {
+		event := stream.Current()
+		delta := event.AsContentBlockDelta()
+		if td := delta.Delta.AsTextDelta(); td.Text != "" {
+			onText(td.Text)
+			full += td.Text
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return "", err
+	}
+
+	return full, nil
+}
+
+func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string) string {
+	reportJSON, _ := json.MarshalIndent(report, "", "  ")
+	return fmt.Sprintf(`Here is the current Kubernetes cluster cost report:
+
+%s
+
+User question: %s
+
+Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, question)
 }
 
 const askSystemPrompt = `You are a Kubernetes FinOps expert assistant. You help users understand their cluster costs and find optimization opportunities.

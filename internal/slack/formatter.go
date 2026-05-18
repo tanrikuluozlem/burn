@@ -24,7 +24,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 	}
 
 	// Header with summary
-	summaryText := fmt.Sprintf("💰 *Monthly:* $%.0f | *Idle:* $%.0f (%.0f%%)\n📦 *Nodes:* %d | *Pods:* %d",
+	summaryText := fmt.Sprintf("💰 *Monthly:* $%.2f | *Idle:* $%.2f (%.0f%%)\n📦 *Nodes:* %d | *Pods:* %d",
 		report.MonthlyCost, report.TotalIdleCost, idlePercent,
 		report.TotalNodes, report.TotalPods)
 
@@ -53,7 +53,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 			if n.IsSpot {
 				spot = " spot"
 			}
-			nodeLines = append(nodeLines, fmt.Sprintf("• `%s` %s%s - $%.0f/mo (%.0f%% idle)",
+			nodeLines = append(nodeLines, fmt.Sprintf("• `%s` %s%s - $%.2f/mo (%.0f%% idle)",
 				truncate(n.Name, 35), n.InstanceType, spot, n.MonthlyPrice, n.IdlePercent*100))
 		}
 
@@ -74,20 +74,20 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 		for _, ns := range report.Namespaces {
 			allocated += ns.MonthlyCost
 			if hasPrometheus {
-				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
+				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 					ns.Name, ns.PodCount, ns.MonthlyCost,
 					formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
 					formatBytes(ns.MemRequest), formatBytes(ns.MemUsage)))
 			} else {
-				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.0f/mo",
+				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.2f/mo",
 					ns.Name, ns.PodCount, ns.MonthlyCost))
 			}
 		}
 		idle := report.MonthlyCost - allocated
 		if idle > 0 {
-			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.0f/mo", idle))
+			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.2f/mo", idle))
 		}
-		nsLines = append(nsLines, fmt.Sprintf("*Total: $%.0f/mo*", report.MonthlyCost))
+		nsLines = append(nsLines, fmt.Sprintf("*Total: $%.2f/mo*", report.MonthlyCost))
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{
@@ -109,7 +109,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 	if len(report.PVCosts) > 0 {
 		pvLines := make([]string, 0, len(report.PVCosts))
 		for _, pv := range report.PVCosts {
-			pvLines = append(pvLines, fmt.Sprintf("• `%s` (%s) — %s %.0fGi — $%.0f/mo",
+			pvLines = append(pvLines, fmt.Sprintf("• `%s` (%s) — %s %.0fGi — $%.2f/mo",
 				pv.Name, pv.Namespace, pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost))
 		}
 		blocks = append(blocks, Block{
@@ -125,7 +125,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 	if len(report.LBCosts) > 0 {
 		lbLines := make([]string, 0, len(report.LBCosts))
 		for _, lb := range report.LBCosts {
-			lbLines = append(lbLines, fmt.Sprintf("• `%s` (%s) — $%.0f/mo", lb.Name, lb.Namespace, lb.MonthlyCost))
+			lbLines = append(lbLines, fmt.Sprintf("• `%s` (%s) — $%.2f/mo", lb.Name, lb.Namespace, lb.MonthlyCost))
 		}
 		blocks = append(blocks, Block{
 			Type: "section",
@@ -141,7 +141,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 		Type: "section",
 		Text: &TextObject{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*Cost Breakdown:*\nCompute: $%.0f | Storage: $%.0f | LB: $%.0f | Network: $%.0f\n*Total: $%.0f/mo*",
+			Text: fmt.Sprintf("*Cost Breakdown:*\nCompute: $%.2f | Storage: $%.2f | LB: $%.2f | Network: $%.2f\n*Total: $%.2f/mo*",
 				report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost, report.TotalMonthlyCost),
 		},
 	})
@@ -152,7 +152,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Potential savings:* $%.0f/mo", report.WasteAnalysis.PotentialSavings),
+				Text: fmt.Sprintf("*Potential savings:* $%.2f/mo", report.WasteAnalysis.PotentialSavings),
 			},
 		})
 	}
@@ -205,7 +205,7 @@ func FormatAIReport(report *advisor.Report) *Message {
 			recText += fmt.Sprintf("\n`%s`", rec.Action)
 		}
 		if rec.EstimatedSavings > 0 {
-			recText += fmt.Sprintf("\n💰 Save $%.0f/mo", rec.EstimatedSavings)
+			recText += fmt.Sprintf("\n💰 Save $%.2f/mo", rec.EstimatedSavings)
 		}
 
 		blocks = append(blocks, Block{
@@ -222,7 +222,7 @@ func FormatAIReport(report *advisor.Report) *Message {
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Total potential savings: $%.0f/mo*", report.TotalPotentialSavings),
+				Text: fmt.Sprintf("*Total potential savings: $%.2f/mo*", report.TotalPotentialSavings),
 			},
 		})
 	}

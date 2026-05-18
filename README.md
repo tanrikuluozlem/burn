@@ -7,40 +7,11 @@
 
 Your Kubernetes cluster is burning money. Find out where.
 
-```
-$ burn analyze --prometheus http://prometheus:9090 --period 7d
-
-Kubernetes Cost Report (7d avg)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Monthly: $350 | Idle: $117 (33%)
-Nodes: 5 | Pods: 77
-
-NAMESPACES
-──────────
-NAMESPACE            PODS  CPU REQ→USED  MEM REQ→USED   COST/MO
-argocd               4     2.0 → 30m     2.0Gi → 393Mi  $56
-amazon-cloudwatch    11    1.6 → 82m     829Mi → 1.3Gi  $44
-kube-system          21    1.4 → 52m     1.6Gi → 757Mi  $41
-...and 7 more namespaces
-Idle (unallocated)                                     $117
-─────────────────────────────────────────────────────────
-Total                                                  $350
-
-LOAD BALANCERS
-──────────────
-NAME                        NAMESPACE    COST/MO
-app-ingress                 app-prod     $16
-
-COST BREAKDOWN
-━━━━━━━━━━━━━━
-Compute:         $350
-Storage:         $0
-Load Balancers:  $16
-Network:         $0
-Total:           $366
-```
+[![demo](https://asciinema.org/a/8ujiH3nRqdwKOliI.svg)](https://asciinema.org/a/8ujiH3nRqdwKOliI)
 
 No agent to deploy. No dashboard to maintain. No YAML to configure. Just install and run.
+
+[![Watch the demo](https://img.youtube.com/vi/uGVvaKXeTf4/maxresdefault.jpg)](https://youtu.be/uGVvaKXeTf4)
 
 ## Why burn
 
@@ -81,10 +52,10 @@ go install github.com/tanrikuluozlem/burn/cmd/burn@latest
 ## Quick start
 
 ```bash
-# Namespace cost breakdown
+# Cost breakdown (without Prometheus)
 burn analyze
 
-# With Prometheus for actual usage data
+# With Prometheus (pass your Prometheus URL)
 burn analyze --prometheus http://prometheus:9090
 
 # 7-day average
@@ -95,46 +66,61 @@ burn analyze --prometheus http://prometheus:9090 --namespace argocd
 ```
 
 ```
-NAMESPACE: argocd (4 pods, $56/mo)
+NAMESPACE: argocd (3 pods, $41.73/mo)
 ──────────────────────────────────
-POD                                CPU REQ→USED  MEM REQ→USED   COST/MO
-argocd-application-controller-0    500m → 23m    512Mi → 346Mi  $14
-argocd-server-5bdc77f5b6-njxc6     500m → 1m     512Mi → 34Mi   $14
-argocd-dex-server-8fc854b84-pxqh5  500m → <1m    512Mi → 20Mi   $14
-argocd-redis-7fd8bb554b-zqdcz      500m → 2m     512Mi → 5Mi    $14
+POD                 CPU REQ→USED  MEM REQ→USED   COST/MO
+argocd-deploy-0001  500m → 28m    512Mi → 299Mi  $13.91
+argocd-deploy-0002  500m → 1m     512Mi → 41Mi   $13.91
+argocd-deploy-0003  500m → 5m     512Mi → 7Mi    $13.91
 ```
 
 ## AI recommendations
 
+Get cluster-wide or namespace-specific recommendations:
+
 ```bash
 burn analyze --prometheus http://prometheus:9090 --period 7d --ai
+burn analyze --prometheus http://prometheus:9090 --namespace app-backend --ai
+burn ask --prometheus http://prometheus:9090 "why is argocd so expensive?"
 ```
 
-Burn sends your cluster data to Claude and returns prioritized, actionable recommendations with real node names and ready-to-run commands:
+Example: `burn analyze --namespace app-backend --period 7d --ai`
 
 ```
+NAMESPACE: app-backend (3 pods, $17.19/mo)
+──────────────────────────────────
+POD                      CPU REQ→USED  MEM REQ→USED   COST/MO
+app-backend-deploy-0001  200m → <1m    256Mi → 9Mi    $5.73
+app-backend-deploy-0002  200m → <1m    256Mi → 9Mi    $5.73
+app-backend-deploy-0003  200m → <1m    256Mi → 128Mi  $5.73
+
 RECOMMENDATIONS
 ───────────────
-All 5 nodes are on-demand t3.large instances with 26-41% idle rates,
-wasting $117/month. Converting to Spot saves up to $277/month.
+The app-backend namespace costs $17.19/mo across 3 pods, but CPU efficiency
+is critically low at ~0.1% — pods request 200m CPU each while p95 usage
+is under 0.31m.
 
-[!!] 1. Convert All 5 Nodes to Spot
-   All 5 on-demand t3.large nodes have 26-41% idle cost, wasting $117/month.
-   Switching to Spot saves up to $277/month (~79% discount).
-   ⚠️ Only for stateless workloads (Deployments with >1 replica).
-   $ eksctl create nodegroup --cluster=CLUSTER --region=eu-central-1 --spot --nodes=5
+[!!] 1. Rightsize CPU Requests using p95 data
+   app-backend-deploy-0001: p95 CPU is 0.22m → recommend 1m (1.5x p95)
+   app-backend-deploy-0002: p95 CPU is 0.30m → recommend 1m (1.5x p95)
+   app-backend-deploy-0003: p95 MEM is 128Mi (50% eff) — leave as-is
+   $ kubectl set resources deployment app-backend -n app-backend \
+     --requests=cpu=1m,memory=14Mi --limits=cpu=200m,memory=256Mi
 
-[!!] 2. Right-size over-provisioned pods
-   argocd-dex-server requests 500m CPU but uses 0.12m (0.0% efficiency), $14/month.
-   $ kubectl set resources deployment argocd-dex-server -n argocd \
-     --requests=cpu=10m,memory=64Mi
+[!!] 2. app-backend-ingress LB ($19.71/mo) costs more than the namespace
+   The load balancer alone exceeds the $17.19/mo compute cost.
+   If internal-only, switch to ClusterIP to eliminate the LB cost.
+   $ kubectl patch svc app-backend-ingress -n app-backend \
+     -p '{"spec": {"type": "ClusterIP"}}'
 
-[!] 3. Remove idle debug pods in dev and qa
-   Two rds-debug pods costing $5.7/month each with near-zero usage.
-   $ kubectl delete pod rds-debug -n app-api-dev
-
-Total potential savings: $277/mo
+[!] 3. Enable VPA in Recommend Mode
+   Prevent over-provisioning from recurring with continuous p95 tracking.
+   $ kubectl apply -f vpa-app-backend.yaml
 ```
+
+### Ask questions in plain English
+
+[![ask demo](https://asciinema.org/a/0nRl6Zj2pmpQIVsC.svg)](https://asciinema.org/a/0nRl6Zj2pmpQIVsC)
 
 Requires `ANTHROPIC_API_KEY` environment variable.
 
@@ -150,7 +136,9 @@ burn serve --port 8080 --prometheus http://prometheus:9090 --period 7d
 |---------|-------------|
 | `/burn` | Full cost report — nodes, namespaces, idle cost, LB, storage |
 | `/burn ns argocd` | Pod-level breakdown for a namespace |
-| `/burn ask "why is argocd so expensive?"` | AI analysis with kubectl commands |
+| `/burn ask "what is the single biggest waste?"` | AI analysis with kubectl commands |
+
+![Slack AI](assets/slack-ask.png)
 
 ### Slack setup
 
@@ -185,7 +173,15 @@ Cloud Pricing  → real VM, storage, and GPU prices (AWS, Azure, GCP)
     CLI / Slack / AI Recommendations
 ```
 
-Pricing for 600+ AWS and 300+ Azure instances is embedded and updated weekly via GitHub Actions. Storage costs are fetched from cloud APIs at runtime. Load balancer costs use cloud-specific hourly rates. Usage-based charges (data processing, LCU) depend on traffic volume and are not included. GPU nodes are detected automatically and priced via ratio-based cost splitting.
+### Pricing sources
+
+| Priority | Source | When |
+|----------|--------|------|
+| 1 | AWS/Azure pricing API | AWS credentials available — real-time, region-aware |
+| 2 | Embedded pricing DB | No credentials — 600+ AWS, 300+ Azure instances, updated weekly |
+| 3 | Static fallback | Unknown instance type — estimates based on instance family |
+
+Storage and load balancer costs are fetched from cloud APIs when available, with static fallbacks. Usage-based charges (data processing, LCU) depend on traffic volume and are not included. GPU nodes are detected automatically and priced via ratio-based cost splitting.
 
 ## Deploy to Kubernetes
 

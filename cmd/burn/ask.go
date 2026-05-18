@@ -57,6 +57,10 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("ANTHROPIC_API_KEY not set")
 	}
 
+	if p := os.Getenv("PROMETHEUS_URL"); p != "" {
+		prometheusURL = p
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -84,12 +88,14 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Thinking...")
 
-	answer, err := advisor.New(apiKey).Ask(ctx, report, question)
+	answer, err := advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
+		fmt.Print(text)
+	})
 	if err != nil {
 		return err
 	}
-
-	fmt.Println(answer)
+	fmt.Println()
+	_ = answer
 
 	if askSlack {
 		webhook := askSlackWebhook

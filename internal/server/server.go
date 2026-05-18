@@ -198,7 +198,11 @@ func (s *Server) handleAsk(ctx context.Context, question string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return s.advisor.Ask(ctx, report, question)
+	answer, err := s.advisor.Ask(ctx, report, question)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("*Q: %s*\n\n%s", question, answer), nil
 }
 
 func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
@@ -217,7 +221,7 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 		header = fmt.Sprintf("*Kubernetes Cost Report (%s avg)*", report.Period)
 	}
 	summary := fmt.Sprintf("%s\n"+
-		"💰 Monthly: $%.0f | Idle: $%.0f (%.0f%%)\n"+
+		"💰 Monthly: $%.2f | Idle: $%.2f (%.0f%%)\n"+
 		"📦 Nodes: %d | Pods: %d",
 		header,
 		report.MonthlyCost, report.TotalIdleCost, idlePercent,
@@ -230,26 +234,26 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 		for _, ns := range report.Namespaces {
 			allocated += ns.MonthlyCost
 			if hasPrometheus {
-				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
+				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 					ns.Name, ns.PodCount, ns.MonthlyCost,
 					formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
 					formatBytes(ns.MemRequest), formatBytes(ns.MemUsage))
 			} else {
-				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.0f/mo", ns.Name, ns.PodCount, ns.MonthlyCost)
+				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.2f/mo", ns.Name, ns.PodCount, ns.MonthlyCost)
 			}
 		}
 		idle := report.MonthlyCost - allocated
 		if idle > 0 {
-			summary += fmt.Sprintf("\n• _Idle (unallocated)_ — $%.0f/mo", idle)
+			summary += fmt.Sprintf("\n• _Idle (unallocated)_ — $%.2f/mo", idle)
 		}
-		summary += fmt.Sprintf("\n*Total: $%.0f/mo*", report.MonthlyCost)
+		summary += fmt.Sprintf("\n*Total: $%.2f/mo*", report.MonthlyCost)
 	}
 
 	// Storage
 	if len(report.PVCosts) > 0 {
 		summary += "\n\n*Storage:*"
 		for _, pv := range report.PVCosts {
-			summary += fmt.Sprintf("\n• `%s` (%s) — %s %.0fGi — $%.0f/mo",
+			summary += fmt.Sprintf("\n• `%s` (%s) — %s %.0fGi — $%.2f/mo",
 				pv.Name, pv.Namespace, pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
 		}
 	}
@@ -258,16 +262,16 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 	if len(report.LBCosts) > 0 {
 		summary += "\n\n*Load Balancers:*"
 		for _, lb := range report.LBCosts {
-			summary += fmt.Sprintf("\n• `%s` (%s) — $%.0f/mo", lb.Name, lb.Namespace, lb.MonthlyCost)
+			summary += fmt.Sprintf("\n• `%s` (%s) — $%.2f/mo", lb.Name, lb.Namespace, lb.MonthlyCost)
 		}
 	}
 
 	// Cost Breakdown
-	summary += fmt.Sprintf("\n\n*Cost Breakdown:*\nCompute: $%.0f | Storage: $%.0f | LB: $%.0f | Network: $%.0f\n*Total: $%.0f/mo*",
+	summary += fmt.Sprintf("\n\n*Cost Breakdown:*\nCompute: $%.2f | Storage: $%.2f | LB: $%.2f | Network: $%.2f\n*Total: $%.2f/mo*",
 		report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost, report.TotalMonthlyCost)
 
 	if report.WasteAnalysis.PotentialSavings > 0 {
-		summary += fmt.Sprintf("\n\n_Potential savings: $%.0f/mo_", report.WasteAnalysis.PotentialSavings)
+		summary += fmt.Sprintf("\n\n_Potential savings: $%.2f/mo_", report.WasteAnalysis.PotentialSavings)
 	}
 
 	return summary, nil
@@ -296,16 +300,16 @@ func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error)
 	}
 
 	hasPrometheus := report.MetricsSource == "prometheus"
-	result := fmt.Sprintf("*Namespace: %s* (%d pods, $%.0f/mo)\n", ns, len(pods), totalCost)
+	result := fmt.Sprintf("*Namespace: %s* (%d pods, $%.2f/mo)\n", ns, len(pods), totalCost)
 
 	for _, p := range pods {
 		if hasPrometheus {
-			result += fmt.Sprintf("\n• `%s` — $%.0f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
+			result += fmt.Sprintf("\n• `%s` — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 				p.Name, p.MonthlyCost,
 				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
 				formatBytes(p.MemRequest), formatBytes(p.MemUsage))
 		} else {
-			result += fmt.Sprintf("\n• `%s` — $%.0f/mo", p.Name, p.MonthlyCost)
+			result += fmt.Sprintf("\n• `%s` — $%.2f/mo", p.Name, p.MonthlyCost)
 		}
 	}
 
@@ -328,6 +332,7 @@ func (s *Server) getReport(ctx context.Context) (*analyzer.CostReport, error) {
 		return nil, err
 	}
 	report.Period = s.config.Period
+
 	return report, nil
 }
 

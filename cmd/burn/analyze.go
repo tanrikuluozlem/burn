@@ -80,10 +80,20 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid period %q: use Prometheus duration format (e.g. 1h, 7d, 30d)", period)
 	}
 
+	if p := os.Getenv("PROMETHEUS_URL"); p != "" {
+		prometheusURL = p
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL, period)
+	// When --ai is used with --namespace, collect full cluster data for AI
+	collectNS := namespace
+	if withAI && namespace != "" {
+		collectNS = ""
+	}
+
+	coll, err := collector.New(kubeconfig, kubecontext, collectNS, prometheusURL, period)
 	if err != nil {
 		return err
 	}
@@ -121,11 +131,26 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 	}
 	report.Period = period
 
+	// When --ai + --namespace: show namespace pods, AI gets full cluster
+	if withAI && namespace != "" {
+		var nsPods []analyzer.PodEfficiency
+		for _, p := range report.AllPods {
+			if p.Namespace == namespace {
+				nsPods = append(nsPods, p)
+			}
+		}
+		if len(nsPods) > 0 {
+			outputNamespacePods(nsPods, report.MetricsSource == "prometheus")
+		}
+	}
+
 	switch output {
 	case "json":
 		return outputJSON(report)
 	default:
-		outputTable(report)
+		if !(withAI && namespace != "") {
+			outputTable(report)
+		}
 	}
 
 	// On-prem pricing notice
@@ -161,7 +186,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 
 		fmt.Println("\nfetching recommendations...")
 		var err error
-		aiReport, err = advisor.New(apiKey).Analyze(ctx, report)
+		aiReport, err = advisor.New(apiKey).Analyze(ctx, report, namespace)
 		if err != nil {
 			return err
 		}
@@ -228,7 +253,7 @@ func outputTable(report *analyzer.CostReport) {
 	}
 	fmt.Println(header)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Printf("Monthly: $%.0f | Idle: $%.0f (%.0f%%)\n", report.MonthlyCost, report.TotalIdleCost, idlePercent)
+	fmt.Printf("Monthly: $%.2f | Idle: $%.2f (%.0f%%)\n", report.MonthlyCost, report.TotalIdleCost, idlePercent)
 	fmt.Printf("Nodes: %d | Pods: %d\n", report.TotalNodes, report.TotalPods)
 
 	fmt.Println("\nNODES")
@@ -241,7 +266,7 @@ func outputTable(report *analyzer.CostReport) {
 		if n.IsSpot {
 			spot = "yes"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t$%.0f\t%.0f%%\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t$%.2f\t%.0f%%\n",
 			truncate(n.Name, 40), n.InstanceType, spot, n.MonthlyPrice, n.IdlePercent*100)
 	}
 	w.Flush()
@@ -256,7 +281,7 @@ func outputTable(report *analyzer.CostReport) {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tNAMESPACE\tCLASS\tSIZE\tCOST/MO")
 		for _, pv := range report.PVCosts {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%.0fGi\t$%.0f\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%.0fGi\t$%.2f\n",
 				truncate(pv.Name, 30), truncate(pv.Namespace, 15), pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
 		}
 		w.Flush()
@@ -268,7 +293,7 @@ func outputTable(report *analyzer.CostReport) {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tNAMESPACE\tCOST/MO")
 		for _, lb := range report.LBCosts {
-			fmt.Fprintf(w, "%s\t%s\t$%.0f\n",
+			fmt.Fprintf(w, "%s\t%s\t$%.2f\n",
 				truncate(lb.Name, 30), truncate(lb.Namespace, 15), lb.MonthlyCost)
 		}
 		w.Flush()
@@ -276,14 +301,14 @@ func outputTable(report *analyzer.CostReport) {
 
 	fmt.Println("\nCOST BREAKDOWN")
 	fmt.Println("━━━━━━━━━━━━━━")
-	fmt.Printf("Compute:         $%.0f\n", report.MonthlyCost)
-	fmt.Printf("Storage:         $%.0f\n", report.TotalPVCost)
-	fmt.Printf("Load Balancers:  $%.0f\n", report.TotalLBCost)
-	fmt.Printf("Network:         $%.0f\n", report.TotalNetworkCost)
-	fmt.Printf("Total:           $%.0f\n", report.TotalMonthlyCost)
+	fmt.Printf("Compute:         $%.2f\n", report.MonthlyCost)
+	fmt.Printf("Storage:         $%.2f\n", report.TotalPVCost)
+	fmt.Printf("Load Balancers:  $%.2f\n", report.TotalLBCost)
+	fmt.Printf("Network:         $%.2f\n", report.TotalNetworkCost)
+	fmt.Printf("Total:           $%.2f\n", report.TotalMonthlyCost)
 
 	if report.WasteAnalysis.PotentialSavings > 0 {
-		fmt.Printf("\nPotential savings: $%.0f/mo\n", report.WasteAnalysis.PotentialSavings)
+		fmt.Printf("\nPotential savings: $%.2f/mo\n", report.WasteAnalysis.PotentialSavings)
 	}
 }
 
@@ -301,14 +326,14 @@ func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus b
 	for _, ns := range namespaces {
 		allocated += ns.MonthlyCost
 		if hasPrometheus {
-			fmt.Fprintf(w, "%s\t%d\t%s → %s\t%s → %s\t$%.0f\n",
+			fmt.Fprintf(w, "%s\t%d\t%s → %s\t%s → %s\t$%.2f\n",
 				truncate(ns.Name, 25),
 				ns.PodCount,
 				formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
 				formatBytes(ns.MemRequest), formatBytes(ns.MemUsage),
 				ns.MonthlyCost)
 		} else {
-			fmt.Fprintf(w, "%s\t%d\t%s\t%s\t$%.0f\n",
+			fmt.Fprintf(w, "%s\t%d\t%s\t%s\t$%.2f\n",
 				truncate(ns.Name, 25),
 				ns.PodCount,
 				formatMillicores(ns.CPURequest),
@@ -320,9 +345,9 @@ func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus b
 	idle := monthlyCost - allocated
 	w.Flush()
 	if idle > 0 {
-		fmt.Printf("%-25s%s$%.0f\n", "Idle (unallocated)", "                              ", idle)
+		fmt.Printf("%-25s%s$%.2f\n", "Idle (unallocated)", "                              ", idle)
 		fmt.Println("─────────────────────────────────────────────────────────")
-		fmt.Printf("%-25s%s$%.0f\n", "Total", "                              ", monthlyCost)
+		fmt.Printf("%-25s%s$%.2f\n", "Total", "                              ", monthlyCost)
 	}
 }
 
@@ -332,14 +357,14 @@ func outputNamespacePods(pods []analyzer.PodEfficiency, hasPrometheus bool) {
 	for _, p := range pods {
 		totalCost += p.MonthlyCost
 	}
-	fmt.Printf("\nNAMESPACE: %s (%d pods, $%.0f/mo)\n", ns, len(pods), totalCost)
+	fmt.Printf("\nNAMESPACE: %s (%d pods, $%.2f/mo)\n", ns, len(pods), totalCost)
 	fmt.Println("──────────────────────────────────")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 	if hasPrometheus {
 		fmt.Fprintln(w, "POD\tCPU REQ→USED\tMEM REQ→USED\tCOST/MO")
 		for _, p := range pods {
-			fmt.Fprintf(w, "%s\t%s → %s\t%s → %s\t$%.0f\n",
+			fmt.Fprintf(w, "%s\t%s → %s\t%s → %s\t$%.2f\n",
 				truncate(p.Name, 35),
 				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
 				formatBytes(p.MemRequest), formatBytes(p.MemUsage),
@@ -348,7 +373,7 @@ func outputNamespacePods(pods []analyzer.PodEfficiency, hasPrometheus bool) {
 	} else {
 		fmt.Fprintln(w, "POD\tCPU REQ\tMEM REQ\tCOST/MO")
 		for _, p := range pods {
-			fmt.Fprintf(w, "%s\t%s\t%s\t$%.0f\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t$%.2f\n",
 				truncate(p.Name, 35),
 				formatMillicores(p.CPURequest),
 				formatBytes(p.MemRequest),
@@ -374,7 +399,7 @@ func outputTopWastefulPods(pods []analyzer.PodEfficiency) {
 	for i := 0; i < maxPods; i++ {
 		p := sorted[i]
 
-		fmt.Fprintf(w, "%s\t%s\t%s → %s\t%s → %s\t$%.0f\n",
+		fmt.Fprintf(w, "%s\t%s\t%s → %s\t%s → %s\t$%.2f\n",
 			truncate(p.Namespace, 20),
 			truncate(p.Name, 25),
 			formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
@@ -457,13 +482,13 @@ func outputAIReport(report *advisor.Report) {
 			fmt.Printf("   $ %s\n", rec.Action)
 		}
 		if rec.EstimatedSavings > 0 {
-			fmt.Printf("   Save $%.0f/mo\n", rec.EstimatedSavings)
+			fmt.Printf("   Save $%.2f/mo\n", rec.EstimatedSavings)
 		}
 		fmt.Println()
 	}
 
 	if report.TotalPotentialSavings > 0 {
-		fmt.Printf("Total potential savings: $%.0f/mo\n", report.TotalPotentialSavings)
+		fmt.Printf("Total potential savings: $%.2f/mo\n", report.TotalPotentialSavings)
 	}
 }
 

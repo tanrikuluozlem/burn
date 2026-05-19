@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -55,20 +56,111 @@ func New(kubeconfig, kubecontext, namespace, prometheusURL, period string) (*Col
 	return c, nil
 }
 
+const pageSize int64 = 500
+
+func (c *Collector) listAllNodes(ctx context.Context) ([]corev1.Node, error) {
+	var all []corev1.Node
+	opts := metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.CoreV1().Nodes().List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+	return all, nil
+}
+
+func (c *Collector) listAllPods(ctx context.Context) ([]corev1.Pod, error) {
+	var all []corev1.Pod
+	opts := metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.CoreV1().Pods(c.namespace).List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+	return all, nil
+}
+
+func (c *Collector) listAllPVCs(ctx context.Context) ([]corev1.PersistentVolumeClaim, error) {
+	var all []corev1.PersistentVolumeClaim
+	opts := metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.CoreV1().PersistentVolumeClaims(c.namespace).List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+	return all, nil
+}
+
+func (c *Collector) listAllServices(ctx context.Context) ([]corev1.Service, error) {
+	var all []corev1.Service
+	opts := metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.CoreV1().Services(c.namespace).List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+	return all, nil
+}
+
+func (c *Collector) listAllIngresses(ctx context.Context) ([]networkingv1.Ingress, error) {
+	var all []networkingv1.Ingress
+	opts := metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.NetworkingV1().Ingresses(c.namespace).List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+	return all, nil
+}
+
 func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
-	nodes, err := c.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodeItems, err := c.listAllNodes(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	pods, err := c.client.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{})
+	podItems, err := c.listAllPods(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(nodeItems) > 200 || len(podItems) > 5000 {
+		log.Printf("warning: large cluster detected (%d nodes, %d pods) — analysis may take longer", len(nodeItems), len(podItems))
 	}
 
 	// group pods by node
 	podsByNode := make(map[string][]PodInfo)
-	for _, pod := range pods.Items {
+	for _, pod := range podItems {
 		if pod.Spec.NodeName == "" {
 			continue
 		}
@@ -76,7 +168,7 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	var nodeInfos []NodeInfo
-	for _, node := range nodes.Items {
+	for _, node := range nodeItems {
 		nodeInfo := parseNode(node)
 		nodeInfo.Pods = podsByNode[node.Name]
 		nodeInfos = append(nodeInfos, nodeInfo)
@@ -88,13 +180,13 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	// Collect PVCs
-	pvcs, err := c.client.CoreV1().PersistentVolumeClaims(c.namespace).List(ctx, metav1.ListOptions{})
+	pvcs, err := c.listAllPVCs(ctx)
 	if err != nil {
 		log.Printf("warning: failed to list PVCs: %v", err)
 	}
 	var pvcInfos []PVCInfo
 	if pvcs != nil {
-		for _, pvc := range pvcs.Items {
+		for _, pvc := range pvcs {
 			if pvc.Status.Phase != corev1.ClaimBound {
 				continue
 			}
@@ -117,13 +209,13 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	// Collect LoadBalancer services
-	services, err := c.client.CoreV1().Services(c.namespace).List(ctx, metav1.ListOptions{})
+	services, err := c.listAllServices(ctx)
 	if err != nil {
 		log.Printf("warning: failed to list services: %v", err)
 	}
 	var lbInfos []LBServiceInfo
 	if services != nil {
-		for _, svc := range services.Items {
+		for _, svc := range services {
 			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 				lbInfos = append(lbInfos, LBServiceInfo{
 					Name:      svc.Name,
@@ -134,13 +226,13 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	// Collect Ingress-based load balancers (ALB/NLB via Ingress controller)
-	ingresses, err := c.client.NetworkingV1().Ingresses(c.namespace).List(ctx, metav1.ListOptions{})
+	ingresses, err := c.listAllIngresses(ctx)
 	if err != nil {
 		log.Printf("warning: failed to list ingresses: %v", err)
 	}
 	seenLBs := make(map[string]bool)
 	if ingresses != nil {
-		for _, ing := range ingresses.Items {
+		for _, ing := range ingresses {
 			for _, lb := range ing.Status.LoadBalancer.Ingress {
 				host := lb.Hostname
 				if host == "" {
@@ -161,7 +253,7 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	return &ClusterInfo{
 		Nodes:         nodeInfos,
 		TotalNodes:    len(nodeInfos),
-		TotalPods:     len(pods.Items),
+		TotalPods:     len(podItems),
 		PVCs:          pvcInfos,
 		LoadBalancers: lbInfos,
 	}, nil
@@ -247,6 +339,11 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 	}
 
 	_ = g.Wait()
+
+	// Log metric counts for debugging
+	if len(nodeCPU) == 0 && len(podCPU) == 0 {
+		log.Printf("warning: no Prometheus metrics received — cost report will use resource requests only")
+	}
 
 	// Merge results (single-threaded after Wait — no races)
 	cpuByIP := make(map[string]float64)

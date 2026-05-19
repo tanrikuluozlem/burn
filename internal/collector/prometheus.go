@@ -90,7 +90,8 @@ func (p *PrometheusClient) retryableDo(req *http.Request) (*http.Response, error
 		}
 
 		if attempt == maxRetries {
-			return resp, nil
+			resp.Body.Close()
+			return nil, fmt.Errorf("prometheus: max retries exceeded, last status %d", resp.StatusCode)
 		}
 
 		// Calculate delay
@@ -325,5 +326,12 @@ func parseValue(v []any) (float64, error) {
 	if !ok {
 		return 0, fmt.Errorf("not a string")
 	}
-	return strconv.ParseFloat(s, 64)
+	val, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, fmt.Errorf("invalid value: %s", s)
+	}
+	return val, nil
 }

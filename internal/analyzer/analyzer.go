@@ -151,6 +151,9 @@ func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInf
 	if err != nil {
 		return NodeCost{}, nil, err
 	}
+	if np == nil {
+		return NodeCost{Name: node.Name, InstanceType: node.InstanceType}, nil, nil
+	}
 
 	cpuRequested := resourcePercentage(sumPodCPU(node.Pods), node.CPUAllocatable)
 	memRequested := resourcePercentage(sumPodMemory(node.Pods), node.MemAllocatable)

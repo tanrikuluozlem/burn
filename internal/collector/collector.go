@@ -66,6 +66,10 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		return nil, err
 	}
 
+	if len(nodes.Items) > 200 || len(pods.Items) > 5000 {
+		log.Printf("warning: large cluster detected (%d nodes, %d pods) — analysis may take longer", len(nodes.Items), len(pods.Items))
+	}
+
 	// group pods by node
 	podsByNode := make(map[string][]PodInfo)
 	for _, pod := range pods.Items {
@@ -247,6 +251,11 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 	}
 
 	_ = g.Wait()
+
+	// Log metric counts for debugging
+	if len(nodeCPU) == 0 && len(podCPU) == 0 {
+		log.Printf("warning: no Prometheus metrics received — cost report will use resource requests only")
+	}
 
 	// Merge results (single-threaded after Wait — no races)
 	cpuByIP := make(map[string]float64)

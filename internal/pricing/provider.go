@@ -6,20 +6,24 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/collector"
 )
 
-// NodePricing holds per-resource cost rates for a node.
 type NodePricing struct {
-	HourlyTotal    float64 // total node hourly cost
-	CPUCostPerCore float64 // cost per CPU core per hour
-	RAMCostPerGiB  float64 // cost per GiB RAM per hour
-	GPUCostPerUnit float64 // cost per GPU per hour (0 if no GPU)
+	HourlyTotal    float64
+	CPUCostPerCore float64
+	RAMCostPerGiB  float64
+	GPUCostPerUnit float64
 }
 
-// CustomPricing holds user-provided prices for on-prem nodes.
 type CustomPricing struct {
-	CPUCostPerCoreHr    float64
-	RAMCostPerGiBHr     float64
-	GPUCostPerHr        float64
+	CPUCostPerCoreHr     float64
+	RAMCostPerGiBHr      float64
+	GPUCostPerHr         float64
 	StoragePricePerGiBMo float64
+}
+
+type SpotDiscount struct {
+	Discount         float64 // 0.0-1.0
+	InterruptionRate int     // 0-4 scale, -1 = unknown
+	Source           string  // "api", "advisor", "default"
 }
 
 type Provider interface {
@@ -29,4 +33,5 @@ type Provider interface {
 	GetStoragePricePerGiBMonth(ctx context.Context, storageClass string) float64
 	GetLoadBalancerPricePerHour() float64
 	GetNetworkEgressPricePerGiB() float64
+	GetSpotDiscount(ctx context.Context, instanceType, region string) SpotDiscount
 }

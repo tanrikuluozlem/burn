@@ -7,9 +7,12 @@ import (
 	"strings"
 
 	"golang.org/x/sync/errgroup"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -250,12 +253,19 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		}
 	}
 
+	// Collect workloads (Deployments + StatefulSets) for spot-readiness
+	workloads, err := c.collectWorkloads(ctx)
+	if err != nil {
+		log.Printf("warning: failed to collect workloads: %v", err)
+	}
+
 	return &ClusterInfo{
 		Nodes:         nodeInfos,
 		TotalNodes:    len(nodeInfos),
 		TotalPods:     len(podItems),
 		PVCs:          pvcInfos,
 		LoadBalancers: lbInfos,
+		Workloads:     workloads,
 	}, nil
 }
 
@@ -519,4 +529,177 @@ func parsePod(pod corev1.Pod) PodInfo {
 		MemoryLimit:   memLim,
 		GPURequest:    gpuReq,
 	}
+}
+
+func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error) {
+	var workloads []WorkloadInfo
+
+	// List PDBs first — we'll match them to workloads by selector
+	var pdbs []policyv1.PodDisruptionBudget
+	opts := metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.PolicyV1().PodDisruptionBudgets(c.namespace).List(ctx, opts)
+		if err != nil {
+			log.Printf("warning: failed to list PDBs: %v", err)
+			break
+		}
+		pdbs = append(pdbs, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+
+	// Deployments
+	opts = metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.AppsV1().Deployments(c.namespace).List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range list.Items {
+			w := WorkloadInfo{
+				Name:      d.Name,
+				Namespace: d.Namespace,
+				Kind:      "Deployment",
+				Replicas:  1,
+			}
+			if d.Spec.Replicas != nil {
+				w.Replicas = *d.Spec.Replicas
+			}
+
+			// local storage check
+			w.HasLocalStorage = hasLocalStorage(d.Spec.Template.Spec.Volumes)
+
+			// priority class
+			w.PriorityClass = d.Spec.Template.Spec.PriorityClassName
+
+			w.HasGPU = hasGPURequest(d.Spec.Template.Spec.Containers)
+
+			if d.Spec.Strategy.Type == appsv1.RollingUpdateDeploymentStrategyType &&
+				d.Spec.Strategy.RollingUpdate != nil &&
+				d.Spec.Strategy.RollingUpdate.MaxUnavailable != nil {
+				w.MaxUnavailable = int32(d.Spec.Strategy.RollingUpdate.MaxUnavailable.IntValue())
+			}
+
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, d.Spec.Selector.MatchLabels)
+
+			workloads = append(workloads, w)
+		}
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+
+	// StatefulSets
+	opts = metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.AppsV1().StatefulSets(c.namespace).List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range list.Items {
+			w := WorkloadInfo{
+				Name:      s.Name,
+				Namespace: s.Namespace,
+				Kind:      "StatefulSet",
+				Replicas:  1,
+			}
+			if s.Spec.Replicas != nil {
+				w.Replicas = *s.Spec.Replicas
+			}
+			w.HasLocalStorage = hasLocalStorage(s.Spec.Template.Spec.Volumes) || len(s.Spec.VolumeClaimTemplates) > 0
+			w.HasGPU = hasGPURequest(s.Spec.Template.Spec.Containers)
+			w.PriorityClass = s.Spec.Template.Spec.PriorityClassName
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, s.Spec.Selector.MatchLabels)
+			workloads = append(workloads, w)
+		}
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+
+	// DaemonSets
+	opts = metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.AppsV1().DaemonSets(c.namespace).List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, ds := range list.Items {
+			w := WorkloadInfo{
+				Name:      ds.Name,
+				Namespace: ds.Namespace,
+				Kind:      "DaemonSet",
+				Replicas:  ds.Status.DesiredNumberScheduled,
+			}
+			w.HasLocalStorage = hasLocalStorage(ds.Spec.Template.Spec.Volumes)
+			w.HasGPU = hasGPURequest(ds.Spec.Template.Spec.Containers)
+			w.PriorityClass = ds.Spec.Template.Spec.PriorityClassName
+			if ds.Spec.Selector != nil {
+				w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, ds.Spec.Selector.MatchLabels)
+			}
+			workloads = append(workloads, w)
+		}
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+
+	return workloads, nil
+}
+
+func hasGPURequest(containers []corev1.Container) bool {
+	for _, c := range containers {
+		for name, q := range c.Resources.Requests {
+			if isGPUResource(string(name)) && !q.IsZero() {
+				return true
+			}
+		}
+		for name, q := range c.Resources.Limits {
+			if isGPUResource(string(name)) && !q.IsZero() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isGPUResource(name string) bool {
+	return strings.HasPrefix(name, "nvidia.com/") ||
+		strings.HasPrefix(name, "amd.com/gpu") ||
+		strings.HasPrefix(name, "intel.com/gpu")
+}
+
+func hasLocalStorage(volumes []corev1.Volume) bool {
+	for _, v := range volumes {
+		if v.EmptyDir != nil || v.HostPath != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]string) (minAvail int32, maxUnavail int32, found bool) {
+	for _, pdb := range pdbs {
+		if pdb.Spec.Selector == nil {
+			continue
+		}
+		selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+		if err != nil {
+			continue
+		}
+		if selector.Matches(labels.Set(workloadLabels)) {
+			if pdb.Spec.MinAvailable != nil {
+				return int32(pdb.Spec.MinAvailable.IntValue()), 0, true
+			}
+			if pdb.Spec.MaxUnavailable != nil {
+				return 0, int32(pdb.Spec.MaxUnavailable.IntValue()), true
+			}
+		}
+	}
+	return 0, 0, false
 }

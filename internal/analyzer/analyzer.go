@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	hoursPerMonth    = 730 // average hours in a month
-	highIdlePercent  = 0.4 // AWS Cost Explorer rightsizing threshold
-	maxPodEfficiency = 10  // show top N inefficient pods
+	hoursPerMonth    = 730
+	highIdlePercent  = 0.4
+	maxPodEfficiency = 10
 )
 
 type Analyzer struct {
@@ -61,7 +61,6 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 		report.Nodes = append(report.Nodes, nc)
 		allPods = append(allPods, pods...)
 
-		// Waste detection: flag nodes where idle cost exceeds threshold
 		if nc.IdlePercent >= highIdlePercent {
 			report.WasteAnalysis.UnderutilizedNodes = append(
 				report.WasteAnalysis.UnderutilizedNodes,
@@ -73,7 +72,7 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 				},
 			)
 			if !nc.IsSpot {
-				report.WasteAnalysis.PotentialSavings += nc.MonthlyPrice * 0.79
+				report.WasteAnalysis.PotentialSavings += nc.MonthlyPrice
 			}
 		}
 	}
@@ -82,37 +81,77 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 	report.MonthlyCost = totalHourly * hoursPerMonth
 	report.TotalIdleCost = totalIdleHourly * hoursPerMonth
 	report.SkippedNodes = skipped
-
 	report.AllPods = allPods
 
-	// PV costs
 	pvCosts := calculatePVCosts(ctx, info.PVCs, a.pricing)
 	report.PVCosts = pvCosts
 	for _, pv := range pvCosts {
 		report.TotalPVCost += pv.MonthlyCost
 	}
 
-	// LB costs
 	lbCosts := calculateLBCosts(info.LoadBalancers, a.pricing)
 	report.LBCosts = lbCosts
 	for _, lb := range lbCosts {
 		report.TotalLBCost += lb.MonthlyCost
 	}
 
-	// Network costs — requires zone/region/internet traffic classification
-	// to avoid misleading estimates. Skipped without traffic-level data.
+	// TODO: network cost needs traffic classification (zone/region/internet)
 	report.NetworkCost = NetworkCost{}
 	report.TotalNetworkCost = 0
 
-	// Namespace aggregation (with PV storage costs)
 	report.Namespaces = aggregateByNamespace(allPods)
 	addStorageCostToNamespaces(report.Namespaces, pvCosts)
 
-	// Total
 	report.TotalMonthlyCost = report.MonthlyCost + report.TotalPVCost + report.TotalLBCost + report.TotalNetworkCost
 
+	hasCloud := false
+	for _, n := range info.Nodes {
+		if n.CloudProvider != collector.CloudUnknown {
+			hasCloud = true
+			break
+		}
+	}
+
+	if len(info.Workloads) > 0 && hasCloud {
+		nsCosts := make(map[string]float64)
+		for _, ns := range report.Namespaces {
+			if ns.PodCount > 0 {
+				nsCosts[ns.Name] = ns.MonthlyCost / float64(ns.PodCount)
+			}
+		}
+		for i := range info.Workloads {
+			perPod := nsCosts[info.Workloads[i].Namespace]
+			info.Workloads[i].MonthlyCost = perPod * float64(info.Workloads[i].Replicas)
+		}
+		report.SpotReadiness = CheckSpotReadiness(info.Workloads)
+
+		// assumes homogeneous cluster for spot discount lookup
+		if len(info.Nodes) > 0 {
+			sd := a.pricing.GetSpotDiscount(ctx, info.Nodes[0].InstanceType, info.Nodes[0].Region)
+			for i := range report.SpotReadiness {
+				if report.SpotReadiness[i].Status == "spot-ready" {
+					report.SpotReadiness[i].Discount = sd.Discount
+					report.SpotReadiness[i].InterruptionRate = sd.InterruptionRate
+					report.SpotReadiness[i].PricingSource = sd.Source
+				}
+			}
+		}
+		report.SpotSavings = SpotSavings(report.SpotReadiness)
+
+		// apply real spot discount to waste analysis
+		if report.WasteAnalysis.PotentialSavings > 0 {
+			discount := 0.0
+			for _, s := range report.SpotReadiness {
+				if s.Status == "spot-ready" && s.Discount > 0 {
+					discount = s.Discount
+					break
+				}
+			}
+			report.WasteAnalysis.PotentialSavings *= discount
+		}
+	}
+
 	if hasPrometheus && len(allPods) > 0 {
-		// Filter pods with valid CPU efficiency (request > 0)
 		var validPods []PodEfficiency
 		for _, p := range allPods {
 			if p.CPUEfficiency >= 0 {
@@ -160,7 +199,6 @@ func (a *Analyzer) calculateNodeCost(ctx context.Context, node collector.NodeInf
 
 	podEfficiencies := calculatePodEfficiencies(node.Pods, np, hasPrometheus)
 
-	// Per-resource idle
 	var totalPodCPUHourly, totalPodRAMHourly float64
 	for _, p := range podEfficiencies {
 		totalPodCPUHourly += p.CPUCost / hoursPerMonth
@@ -207,25 +245,20 @@ func calculatePodEfficiencies(pods []collector.PodInfo, np *pricing.NodePricing,
 	var result []PodEfficiency
 
 	for _, pod := range pods {
-		// Skip pods without requests (can't calculate efficiency)
 		if pod.CPURequest == 0 && pod.MemoryRequest == 0 {
 			continue
 		}
 
-		// CPU efficiency: usage (cores) / request (millicores converted to cores)
 		cpuEff := -1.0
 		if pod.CPURequest > 0 {
-			cpuRequestCores := float64(pod.CPURequest) / 1000.0
-			cpuEff = pod.CPUUsage / cpuRequestCores
+			cpuEff = pod.CPUUsage / (float64(pod.CPURequest) / 1000.0)
 		}
 
-		// Memory efficiency: usage / request
 		memEff := -1.0
 		if pod.MemoryRequest > 0 {
 			memEff = float64(pod.MemoryUsage) / float64(pod.MemoryRequest)
 		}
 
-		// Effective resource: max(request, usage)
 		cpuCores := float64(pod.CPURequest) / 1000.0
 		if hasPrometheus && pod.CPUUsage > cpuCores {
 			cpuCores = pod.CPUUsage
@@ -237,7 +270,6 @@ func calculatePodEfficiencies(pods []collector.PodInfo, np *pricing.NodePricing,
 			ramGiB = usageGiB
 		}
 
-		// Per-resource cost
 		cpuHourlyCost := cpuCores * np.CPUCostPerCore
 		ramHourlyCost := ramGiB * np.RAMCostPerGiB
 		gpuHourlyCost := float64(pod.GPURequest) * np.GPUCostPerUnit
@@ -360,22 +392,6 @@ func calculateLBCosts(lbs []collector.LBServiceInfo, p pricing.Provider) []LBCos
 		})
 	}
 	return result
-}
-
-func calculateNetworkCost(nodes []collector.NodeInfo, p pricing.Provider) NetworkCost {
-	var totalBytesPerSec float64
-	for _, node := range nodes {
-		totalBytesPerSec += node.NetworkEgressBytesPerSec
-	}
-	if totalBytesPerSec <= 0 {
-		return NetworkCost{}
-	}
-	giBPerMonth := totalBytesPerSec * 86400 * 30.44 / (1024 * 1024 * 1024)
-	pricePerGiB := p.GetNetworkEgressPricePerGiB()
-	return NetworkCost{
-		EgressGiBPerMonth: giBPerMonth,
-		MonthlyCost:       giBPerMonth * pricePerGiB,
-	}
 }
 
 func addStorageCostToNamespaces(namespaces []NamespaceCost, pvCosts []PVCost) {

@@ -29,15 +29,22 @@ func New(apiKey string) *Advisor {
 func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport, focusNamespace ...string) (*Report, error) {
 	prompt := buildPrompt(report)
 	if len(focusNamespace) > 0 && focusNamespace[0] != "" {
-		// Find namespace cost for the focus namespace
+		ns := focusNamespace[0]
 		var nsCost float64
-		for _, ns := range report.Namespaces {
-			if ns.Name == focusNamespace[0] {
-				nsCost = ns.MonthlyCost
+		for _, n := range report.Namespaces {
+			if n.Name == ns {
+				nsCost = n.MonthlyCost
 				break
 			}
 		}
-		prompt += fmt.Sprintf("\n\nFOCUS: Analyze only the '%s' namespace (total cost: $%.2f/mo). Give pod-level recommendations for this namespace only. Do NOT recommend node-level changes (spot conversion, node consolidation, node draining). Do NOT include estimated_savings — savings depend on how much the user rightsizes, which varies. Ignore the PRE-CALCULATED SAVINGS section — it is cluster-wide and does not apply here.", focusNamespace[0], nsCost)
+		var podList string
+		for _, p := range report.AllPods {
+			if p.Namespace == ns {
+				podList += fmt.Sprintf("  - %s (CPU: %dm req, %.2fm used, MEM: %dMi req, %dMi used, $%.2f/mo)\n",
+					p.Name, p.CPURequest, p.CPUUsage*1000, p.MemRequest/(1024*1024), p.MemUsage/(1024*1024), p.MonthlyCost)
+			}
+		}
+		prompt += fmt.Sprintf("\n\nFOCUS: Analyze ONLY the '%s' namespace (total cost: $%.2f/mo).\nPods in this namespace:\n%s\nRULES FOR NAMESPACE MODE:\n- ONLY reference pods listed above. Do NOT mention pods from other namespaces.\n- Do NOT recommend node-level changes (spot, consolidation, draining).\n- Do NOT include estimated_savings.\n- Ignore the PRE-CALCULATED SAVINGS section.\n- Use ONLY the pod names listed above in titles and commands.", ns, nsCost, podList)
 	}
 
 	tool := anthropic.ToolParam{
@@ -110,13 +117,16 @@ RISK WARNINGS (MUST add to description):
 - Consolidation: "⚠️ Test failover first. Check PodDisruptionBudgets."
 
 RULES:
-1. Use PRE-CALCULATED SAVINGS from prompt exactly
+1. Use PRE-CALCULATED SAVINGS from prompt exactly. The estimated_savings value MUST be the exact dollar amount from PRE-CALCULATED SAVINGS. Do NOT calculate your own savings — your math will be wrong.
 2. Use REAL node names from data
-3. Only ONE recommendation gets estimated_savings
+3. Only ONE recommendation gets estimated_savings, and it MUST match the "Use $X for estimated_savings" line from the prompt
 4. Pick ONE strategy: spot OR consolidation (not both)
 5. Reference NAMESPACE data: compare costs, identify over-provisioned namespaces, flag dev/qa vs prod imbalances
 6. Do NOT calculate percentages or dollar values yourself. Only use numbers that appear in the data. If a value is not in the data, do not invent it.
-7. When p95 data is available, use it for rightsizing recommendations: recommend request = p95 × 1.5 (50% headroom above peak). Explain why: "p95 CPU over the analysis period is Xm, so we recommend Ym request (1.5x p95 headroom)". This is more trustworthy than arbitrary values.`
+7. When p95 data is available, use it for rightsizing recommendations: recommend request = p95 × 1.5 (50% headroom above peak). Explain why: "p95 CPU over the analysis period is Xm, so we recommend Ym request (1.5x p95 headroom)". This is more trustworthy than arbitrary values.
+8. The title recommended value MUST match the value in the description. Do not put one value in the title and a different value in the body.
+9. Only use real kubectl flags. Do NOT invent flags like --if-exists, --dry-run=true (correct: --dry-run=client), or any flag you are not certain exists.
+10. Spot interruption notice: AWS = 2 min, Azure = 30 sec, GCP = 30 sec. Use the correct value for the detected cloud.`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",
@@ -214,7 +224,28 @@ func buildPrompt(report *analyzer.CostReport) string {
 
 	savingsInfo += fmt.Sprintf("\nUse $%.2f for estimated_savings (best option).\n", savings.TotalSavings())
 
-	return fmt.Sprintf("Cluster data:\n%s%s%s%s%s", string(data), nodeSummary, nsSummary, podSummary, savingsInfo)
+	// Spot readiness summary for AI
+	spotSummary := ""
+	if len(report.SpotReadiness) > 0 {
+		ready := 0
+		for _, s := range report.SpotReadiness {
+			if s.Status == "spot-ready" {
+				ready++
+			}
+		}
+		spotSummary = fmt.Sprintf("\nSPOT READINESS (%d/%d workloads spot-ready, potential savings $%.2f/mo):\n",
+			ready, len(report.SpotReadiness), report.SpotSavings)
+		for _, s := range report.SpotReadiness {
+			extra := ""
+			if s.Status == "spot-ready" && s.Discount > 0 {
+				extra = fmt.Sprintf(" — %.0f%% discount (%s)", s.Discount*100, s.PricingSource)
+			}
+			spotSummary += fmt.Sprintf("• %s/%s (%s, %d replicas) — %s: %s%s\n",
+				s.Namespace, s.Name, s.Kind, s.Replicas, s.Status, s.Reason, extra)
+		}
+	}
+
+	return fmt.Sprintf("Cluster data:\n%s%s%s%s%s%s", string(data), nodeSummary, nsSummary, podSummary, savingsInfo, spotSummary)
 }
 
 type toolInput struct {
@@ -311,4 +342,6 @@ Guidelines:
 - If you don't have enough data to answer, say so
 - Format numbers clearly ($X.XX for costs, X% for percentages)
 - CPU usage in the report is in cores. Convert to millicores for display: 0.005 cores = 5m, 0.0001 cores = <1m
-- Do NOT calculate your own values. Use the data as provided.`
+- Do NOT calculate your own values. Use the data as provided.
+- When listing items, COUNT them from the data. Do not guess the count — verify it matches the items you list.
+- Only use real kubectl flags. Do NOT invent flags.`

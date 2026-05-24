@@ -6,14 +6,12 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 )
 
-// PotentialSavings contains pre-calculated savings opportunities
 type PotentialSavings struct {
 	SpotConversion    *SavingsOpportunity
 	NodeConsolidation *SavingsOpportunity
 	RightSizing       *SavingsOpportunity
 }
 
-// SavingsOpportunity represents a calculated savings opportunity
 type SavingsOpportunity struct {
 	Type           string
 	MonthlySavings float64
@@ -22,33 +20,25 @@ type SavingsOpportunity struct {
 	AffectedNodes  []string
 }
 
-// SavingsConfig holds configurable parameters for savings calculations.
 type SavingsConfig struct {
-	SpotDiscountRate float64 // 0.0-1.0, default 0.79
+	SpotDiscountRate float64 // overridden by real pricing when available
 }
 
-// DefaultSavingsConfig returns default savings parameters.
 func DefaultSavingsConfig() SavingsConfig {
-	return SavingsConfig{
-		SpotDiscountRate: 0.79,
-	}
+	return SavingsConfig{}
 }
 
-// CalculateSavings computes deterministic savings opportunities from the cost report.
 func CalculateSavings(report *analyzer.CostReport, cfg SavingsConfig) *PotentialSavings {
-	if cfg.SpotDiscountRate == 0 {
-		cfg.SpotDiscountRate = 0.79
+	for _, s := range report.SpotReadiness {
+		if s.Status == "spot-ready" && s.Discount > 0 {
+			cfg.SpotDiscountRate = s.Discount
+			break
+		}
 	}
 
 	savings := &PotentialSavings{}
-
-	// 1. Spot conversion savings
 	savings.SpotConversion = calculateSpotSavings(report, cfg.SpotDiscountRate)
-
-	// 2. Node consolidation: remove underutilized nodes
 	savings.NodeConsolidation = calculateConsolidationSavings(report)
-
-	// 3. Right-sizing: pod-level with p95, fallback to node-level
 	savings.RightSizing = calculateRightSizingSavings(report)
 
 	return savings
@@ -176,8 +166,8 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 
 		// CPU: if efficiency < 50% and pod actually has some usage, recommend downsizing
 		if pod.CPUEfficiency > 0 && pod.CPUEfficiency < 0.50 && pod.CPUCost > 0 {
-			// Recommend request = p95_usage * 1.2 (20% headroom)
-			recommended := cpuUsage * 1.2 * 1000 // to millicores
+			// Recommend request = p95_usage * 1.5 (50% headroom above peak)
+			recommended := cpuUsage * 1.5 * 1000 // to millicores
 			if recommended < float64(pod.CPURequest) {
 				cpuSavings = pod.CPUCost * (1.0 - recommended/float64(pod.CPURequest))
 			}
@@ -185,7 +175,7 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 
 		// RAM: if efficiency < 50% and pod actually has some usage, recommend downsizing
 		if pod.MemEfficiency > 0 && pod.MemEfficiency < 0.50 && pod.RAMCost > 0 {
-			recommended := float64(memUsage) * 1.2
+			recommended := float64(memUsage) * 1.5
 			if recommended < float64(pod.MemRequest) {
 				ramSavings = pod.RAMCost * (1.0 - recommended/float64(pod.MemRequest))
 			}

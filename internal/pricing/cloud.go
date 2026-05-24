@@ -31,19 +31,17 @@ func (p *CloudPricingProvider) SetCustomPricing(cp *CustomPricing) {
 	p.customPricing = cp
 }
 
+const spotFallbackMultiplier = 0.21
+
 func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
-	// Pass region to fallback for region-aware pricing
 	if node.Region != "" {
 		p.fallback.SetRegion(node.Region)
 	}
-
-	// Remember cloud provider for LB pricing
 	if p.detectedCloud == "" && node.CloudProvider != collector.CloudUnknown {
 		p.detectedCloud = node.CloudProvider
 	}
 
 	var cloudName string
-
 	switch node.CloudProvider {
 	case collector.CloudAWS:
 		cloudName = "aws"
@@ -53,7 +51,6 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 		cloudName = "gcp"
 	}
 
-	// Spot: cloud API first, then embedded DB fallback
 	if node.IsSpot {
 		switch node.CloudProvider {
 		case collector.CloudAWS:
@@ -69,16 +66,18 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 				}
 			}
 		}
-		// Fallback: on-demand price * 0.21
 		if cloudName != "" {
 			if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
-				return price * 0.21, nil
+				savings, _, ok := lookupSpotAdvisor(node.InstanceType, node.Region)
+				if ok && savings > 0 {
+					return price * (1 - float64(savings)/100.0), nil
+				}
+				return price * spotFallbackMultiplier, nil
 			}
 		}
 		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, true)
 	}
 
-	// On-demand: cloud API → embedded DB → static fallback
 	switch node.CloudProvider {
 	case collector.CloudAWS:
 		if p.aws != nil {
@@ -94,37 +93,36 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 		}
 	}
 
-	// Embedded DB fallback
 	if cloudName != "" {
 		if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
-			slog.Debug("using embedded pricing (cloud API unavailable)",
+			slog.Debug("using embedded pricing",
 				"instance_type", node.InstanceType, "region", node.Region)
 			return price, nil
 		}
 	}
 
-	// Static fallback
-	slog.Warn("using static fallback pricing (cloud API and embedded DB unavailable)",
+	slog.Warn("using static fallback pricing",
 		"instance_type", node.InstanceType, "region", node.Region)
 	return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, false)
 }
 
 func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
 	if isSpot {
-		// Spot: cloud API first
 		if p.aws != nil {
 			if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true); err == nil {
 				return price, nil
 			}
 		}
-		// Fallback: on-demand * 0.21
 		if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
-			return price * 0.21, nil
+			savings, _, ok := lookupSpotAdvisor(instanceType, region)
+			if ok && savings > 0 {
+				return price * (1 - float64(savings)/100.0), nil
+			}
+			return price * spotFallbackMultiplier, nil
 		}
 		return p.fallback.GetHourlyPrice(ctx, instanceType, region, true)
 	}
 
-	// On-demand: cloud API → embedded DB → static fallback
 	if p.aws != nil {
 		if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false); err == nil {
 			return price, nil
@@ -139,7 +137,6 @@ func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType,
 }
 
 func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collector.NodeInfo) (*NodePricing, error) {
-	// Custom pricing override (on-prem)
 	if p.customPricing != nil && node.CloudProvider == collector.CloudUnknown {
 		np := &NodePricing{
 			CPUCostPerCore: p.customPricing.CPUCostPerCoreHr,
@@ -223,4 +220,43 @@ func (p *CloudPricingProvider) GetLoadBalancerPricePerHour() float64 {
 
 func (p *CloudPricingProvider) GetNetworkEgressPricePerGiB() float64 {
 	return p.fallback.GetNetworkEgressPricePerGiB()
+}
+
+func (p *CloudPricingProvider) GetSpotDiscount(ctx context.Context, instanceType, region string) SpotDiscount {
+	if p.aws != nil && region != "" {
+		spotPrice, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true)
+		if err == nil && spotPrice > 0 {
+			onDemandPrice, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false)
+			if err == nil && onDemandPrice > 0 {
+				discount := 1 - (spotPrice / onDemandPrice)
+				if discount > 0 && discount < 1 {
+					_, ir, ok := lookupSpotAdvisor(instanceType, region)
+					irVal := -1
+					if ok {
+						irVal = ir
+					}
+					return SpotDiscount{
+						Discount:        discount,
+						InterruptionRate: irVal,
+						Source:          "api",
+					}
+				}
+			}
+		}
+	}
+
+	savings, ir, ok := lookupSpotAdvisor(instanceType, region)
+	if ok && savings > 0 {
+		return SpotDiscount{
+			Discount:        float64(savings) / 100.0,
+			InterruptionRate: ir,
+			Source:          "advisor",
+		}
+	}
+
+	return SpotDiscount{
+		Discount:        0,
+		InterruptionRate: -1,
+		Source:          "unavailable",
+	}
 }

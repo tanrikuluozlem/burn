@@ -6,6 +6,7 @@ import (
 
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
+	"github.com/tanrikuluozlem/burn/internal/output"
 )
 
 func TestFormatCostReport(t *testing.T) {
@@ -114,10 +115,10 @@ func TestSeverityEmoji(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	if truncate("short", 10) != "short" {
+	if output.Truncate("short", 10) != "short" {
 		t.Error("should not truncate short strings")
 	}
-	if truncate("this is a very long string", 10) != "this is..." {
+	if output.Truncate("this is a very long string", 10) != "this is..." {
 		t.Error("should truncate with ellipsis")
 	}
 }

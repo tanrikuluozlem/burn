@@ -42,8 +42,7 @@ func (p *StaticProvider) GetHourlyPrice(_ context.Context, instanceType, region 
 	}
 
 	if isSpot {
-		// Spot discount (~79% off on-demand)
-		return price * 0.21, nil
+		return price * spotFallbackMultiplier, nil
 	}
 	return price, nil
 }
@@ -105,6 +104,23 @@ func (p *StaticProvider) GetLoadBalancerPricePerHour() float64 {
 
 func (p *StaticProvider) GetNetworkEgressPricePerGiB() float64 {
 	return 0.01 // zone egress
+}
+
+func (p *StaticProvider) GetSpotDiscount(_ context.Context, instanceType, region string) SpotDiscount {
+	// Try Spot Advisor JSON first
+	savings, ir, ok := lookupSpotAdvisor(instanceType, region)
+	if ok && savings > 0 {
+		return SpotDiscount{
+			Discount:        float64(savings) / 100.0,
+			InterruptionRate: ir,
+			Source:          "advisor",
+		}
+	}
+	return SpotDiscount{
+		Discount:        0,
+		InterruptionRate: -1,
+		Source:          "unavailable",
+	}
 }
 
 func (p *StaticProvider) GetNodePricing(ctx context.Context, node collector.NodeInfo) (*NodePricing, error) {

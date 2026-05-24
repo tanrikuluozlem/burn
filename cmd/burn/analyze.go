@@ -13,6 +13,7 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 	"github.com/tanrikuluozlem/burn/internal/collector"
+	ofmt "github.com/tanrikuluozlem/burn/internal/output"
 	"github.com/tanrikuluozlem/burn/internal/pricing"
 	"github.com/tanrikuluozlem/burn/internal/slack"
 	"github.com/spf13/cobra"
@@ -40,6 +41,7 @@ var (
 	ramPrice      float64
 	gpuPrice      float64
 	storagePrice  float64
+	showSpot      bool
 )
 
 var analyzeCmd = &cobra.Command{
@@ -65,6 +67,7 @@ func init() {
 	f.Float64Var(&ramPrice, "ram-price", 0, "custom RAM price per GiB per hour (on-prem)")
 	f.Float64Var(&gpuPrice, "gpu-price", 0, "custom GPU price per unit per hour (on-prem)")
 	f.Float64Var(&storagePrice, "storage-price", 0, "custom storage price per GiB per month (on-prem)")
+	f.BoolVar(&showSpot, "spot", false, "show spot instance readiness details")
 
 	rootCmd.AddCommand(analyzeCmd)
 }
@@ -267,7 +270,7 @@ func outputTable(report *analyzer.CostReport) {
 			spot = "yes"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t$%.2f\t%.0f%%\n",
-			truncate(n.Name, 40), n.InstanceType, spot, n.MonthlyPrice, n.IdlePercent*100)
+			ofmt.Truncate(n.Name, 40), n.InstanceType, spot, n.MonthlyPrice, n.IdlePercent*100)
 	}
 	w.Flush()
 
@@ -282,7 +285,7 @@ func outputTable(report *analyzer.CostReport) {
 		fmt.Fprintln(w, "NAME\tNAMESPACE\tCLASS\tSIZE\tCOST/MO")
 		for _, pv := range report.PVCosts {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%.0fGi\t$%.2f\n",
-				truncate(pv.Name, 30), truncate(pv.Namespace, 15), pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
+				ofmt.Truncate(pv.Name, 30), ofmt.Truncate(pv.Namespace, 15), pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
 		}
 		w.Flush()
 	}
@@ -294,9 +297,46 @@ func outputTable(report *analyzer.CostReport) {
 		fmt.Fprintln(w, "NAME\tNAMESPACE\tCOST/MO")
 		for _, lb := range report.LBCosts {
 			fmt.Fprintf(w, "%s\t%s\t$%.2f\n",
-				truncate(lb.Name, 30), truncate(lb.Namespace, 15), lb.MonthlyCost)
+				ofmt.Truncate(lb.Name, 30), ofmt.Truncate(lb.Namespace, 15), lb.MonthlyCost)
 		}
 		w.Flush()
+	}
+
+	if len(report.SpotReadiness) > 0 {
+		if showSpot {
+			fmt.Println("\nSPOT READINESS")
+			fmt.Println("──────────────")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tNAMESPACE\tKIND\tREPLICAS\tSTATUS\tDISCOUNT\tINTERRUPT\tREASON")
+			for _, s := range report.SpotReadiness {
+				discount := "—"
+				interrupt := "—"
+				if s.Status == "spot-ready" {
+					discount = fmt.Sprintf("%.0f%%", s.Discount*100)
+					interrupt = interruptionLabel(s.InterruptionRate)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+					ofmt.Truncate(s.Name, 25), ofmt.Truncate(s.Namespace, 15), s.Kind, s.Replicas, s.Status, discount, interrupt, ofmt.Truncate(s.Reason, 40))
+			}
+			w.Flush()
+			if report.SpotSavings > 0 {
+				source := spotPricingSource(report.SpotReadiness)
+				fmt.Printf("\nSpot savings: $%.2f/mo (%s)\n", report.SpotSavings, source)
+			}
+		} else {
+			ready := 0
+			for _, s := range report.SpotReadiness {
+				if s.Status == "spot-ready" {
+					ready++
+				}
+			}
+			total := len(report.SpotReadiness)
+			if report.SpotSavings > 0 {
+				fmt.Printf("\nSpot-ready: %d/%d workloads, save $%.2f/mo (use --spot for details)\n", ready, total, report.SpotSavings)
+			} else {
+				fmt.Printf("\nSpot-ready: %d/%d workloads (use --spot for details)\n", ready, total)
+			}
+		}
 	}
 
 	fmt.Println("\nCOST BREAKDOWN")
@@ -307,9 +347,6 @@ func outputTable(report *analyzer.CostReport) {
 	fmt.Printf("Network:         $%.2f\n", report.TotalNetworkCost)
 	fmt.Printf("Total:           $%.2f\n", report.TotalMonthlyCost)
 
-	if report.WasteAnalysis.PotentialSavings > 0 {
-		fmt.Printf("\nPotential savings: $%.2f/mo\n", report.WasteAnalysis.PotentialSavings)
-	}
 }
 
 func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus bool, monthlyCost float64) {
@@ -327,17 +364,17 @@ func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus b
 		allocated += ns.MonthlyCost
 		if hasPrometheus {
 			fmt.Fprintf(w, "%s\t%d\t%s → %s\t%s → %s\t$%.2f\n",
-				truncate(ns.Name, 25),
+				ofmt.Truncate(ns.Name, 25),
 				ns.PodCount,
-				formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
-				formatBytes(ns.MemRequest), formatBytes(ns.MemUsage),
+				ofmt.FormatMillicores(ns.CPURequest), ofmt.FormatCores(ns.CPUUsage),
+				ofmt.FormatBytes(ns.MemRequest), ofmt.FormatBytes(ns.MemUsage),
 				ns.MonthlyCost)
 		} else {
 			fmt.Fprintf(w, "%s\t%d\t%s\t%s\t$%.2f\n",
-				truncate(ns.Name, 25),
+				ofmt.Truncate(ns.Name, 25),
 				ns.PodCount,
-				formatMillicores(ns.CPURequest),
-				formatBytes(ns.MemRequest),
+				ofmt.FormatMillicores(ns.CPURequest),
+				ofmt.FormatBytes(ns.MemRequest),
 				ns.MonthlyCost)
 		}
 	}
@@ -365,109 +402,60 @@ func outputNamespacePods(pods []analyzer.PodEfficiency, hasPrometheus bool) {
 		fmt.Fprintln(w, "POD\tCPU REQ→USED\tMEM REQ→USED\tCOST/MO")
 		for _, p := range pods {
 			fmt.Fprintf(w, "%s\t%s → %s\t%s → %s\t$%.2f\n",
-				truncate(p.Name, 35),
-				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
-				formatBytes(p.MemRequest), formatBytes(p.MemUsage),
+				ofmt.Truncate(p.Name, 35),
+				ofmt.FormatMillicores(p.CPURequest), ofmt.FormatCores(p.CPUUsage),
+				ofmt.FormatBytes(p.MemRequest), ofmt.FormatBytes(p.MemUsage),
 				p.MonthlyCost)
 		}
 	} else {
 		fmt.Fprintln(w, "POD\tCPU REQ\tMEM REQ\tCOST/MO")
 		for _, p := range pods {
 			fmt.Fprintf(w, "%s\t%s\t%s\t$%.2f\n",
-				truncate(p.Name, 35),
-				formatMillicores(p.CPURequest),
-				formatBytes(p.MemRequest),
+				ofmt.Truncate(p.Name, 35),
+				ofmt.FormatMillicores(p.CPURequest),
+				ofmt.FormatBytes(p.MemRequest),
 				p.MonthlyCost)
 		}
 	}
 	w.Flush()
 }
 
-func outputTopWastefulPods(pods []analyzer.PodEfficiency) {
-	sorted := sortPodsByWaste(pods)
 
-	fmt.Println("\nTOP OVER-PROVISIONED PODS")
-	fmt.Println("─────────────────────────")
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAMESPACE\tPOD\tCPU REQ→USED\tMEM REQ→USED\tCOST/MO")
 
-	maxPods := 5
-	if showAllPods || len(sorted) <= maxPods {
-		maxPods = len(sorted)
-	}
 
-	for i := 0; i < maxPods; i++ {
-		p := sorted[i]
-
-		fmt.Fprintf(w, "%s\t%s\t%s → %s\t%s → %s\t$%.2f\n",
-			truncate(p.Namespace, 20),
-			truncate(p.Name, 25),
-			formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
-			formatBytes(p.MemRequest), formatBytes(p.MemUsage),
-			p.MonthlyCost)
-	}
-	w.Flush()
-
-	if len(pods) > maxPods && !showAllPods {
-		fmt.Printf("\n...and %d more pods (use --all to show all)\n", len(pods)-maxPods)
+func interruptionLabel(rate int) string {
+	switch rate {
+	case 0:
+		return "<5%"
+	case 1:
+		return "5-10%"
+	case 2:
+		return "10-15%"
+	case 3:
+		return "15-20%"
+	case 4:
+		return ">20%"
+	default:
+		return "—"
 	}
 }
 
-func formatCores(cores float64) string {
-	m := cores * 1000
-	if m < 1 {
-		return "<1m"
-	}
-	if m >= 1000 {
-		return fmt.Sprintf("%.1f", cores)
-	}
-	return fmt.Sprintf("%.0fm", m)
-}
-
-func formatMillicores(m int64) string {
-	if m >= 1000 {
-		return fmt.Sprintf("%.1f", float64(m)/1000)
-	}
-	return fmt.Sprintf("%dm", m)
-}
-
-func formatBytes(b int64) string {
-	const (
-		gi = 1024 * 1024 * 1024
-		mi = 1024 * 1024
-	)
-	if b >= gi {
-		return fmt.Sprintf("%.1fGi", float64(b)/float64(gi))
-	}
-	return fmt.Sprintf("%dMi", b/mi)
-}
-
-func sortPodsByWaste(pods []analyzer.PodEfficiency) []analyzer.PodEfficiency {
-	sorted := make([]analyzer.PodEfficiency, len(pods))
-	copy(sorted, pods)
-
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := 0; j < len(sorted)-i-1; j++ {
-			avgEffJ := (sorted[j].CPUEfficiency + sorted[j].MemEfficiency) / 2
-			avgEffJ1 := (sorted[j+1].CPUEfficiency + sorted[j+1].MemEfficiency) / 2
-			wasteJ := sorted[j].MonthlyCost * (1 - avgEffJ)
-			wasteJ1 := sorted[j+1].MonthlyCost * (1 - avgEffJ1)
-
-			if wasteJ < wasteJ1 {
-				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
+func spotPricingSource(results []analyzer.SpotReadiness) string {
+	for _, r := range results {
+		if r.Status == "spot-ready" {
+			switch r.PricingSource {
+			case "api":
+				return "real-time API pricing"
+			case "advisor":
+				return "AWS Spot Advisor data"
+			default:
+				return "default estimate"
 			}
 		}
 	}
-	return sorted
+	return "default estimate"
 }
 
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
-}
 
 func outputAIReport(report *advisor.Report) {
 	fmt.Println("\nRECOMMENDATIONS")

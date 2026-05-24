@@ -12,6 +12,7 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 	"github.com/tanrikuluozlem/burn/internal/collector"
+	"github.com/tanrikuluozlem/burn/internal/output"
 	"github.com/tanrikuluozlem/burn/internal/pricing"
 )
 
@@ -236,8 +237,8 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 			if hasPrometheus {
 				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 					ns.Name, ns.PodCount, ns.MonthlyCost,
-					formatMillicores(ns.CPURequest), formatCores(ns.CPUUsage),
-					formatBytes(ns.MemRequest), formatBytes(ns.MemUsage))
+					output.FormatMillicores(ns.CPURequest), output.FormatCores(ns.CPUUsage),
+					output.FormatBytes(ns.MemRequest), output.FormatBytes(ns.MemUsage))
 			} else {
 				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.2f/mo", ns.Name, ns.PodCount, ns.MonthlyCost)
 			}
@@ -266,13 +267,24 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 		}
 	}
 
-	// Cost Breakdown
+	// Spot readiness
+	if len(report.SpotReadiness) > 0 {
+		ready := 0
+		for _, sr := range report.SpotReadiness {
+			if sr.Status == "spot-ready" {
+				ready++
+			}
+		}
+		total := len(report.SpotReadiness)
+		if report.SpotSavings > 0 {
+			summary += fmt.Sprintf("\n\n*Spot Readiness:* %d/%d workloads spot-ready — save $%.2f/mo", ready, total, report.SpotSavings)
+		} else {
+			summary += fmt.Sprintf("\n\n*Spot Readiness:* %d/%d workloads spot-ready", ready, total)
+		}
+	}
+
 	summary += fmt.Sprintf("\n\n*Cost Breakdown:*\nCompute: $%.2f | Storage: $%.2f | LB: $%.2f | Network: $%.2f\n*Total: $%.2f/mo*",
 		report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost, report.TotalMonthlyCost)
-
-	if report.WasteAnalysis.PotentialSavings > 0 {
-		summary += fmt.Sprintf("\n\n_Potential savings: $%.2f/mo_", report.WasteAnalysis.PotentialSavings)
-	}
 
 	return summary, nil
 }
@@ -306,8 +318,8 @@ func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error)
 		if hasPrometheus {
 			result += fmt.Sprintf("\n• `%s` — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 				p.Name, p.MonthlyCost,
-				formatMillicores(p.CPURequest), formatCores(p.CPUUsage),
-				formatBytes(p.MemRequest), formatBytes(p.MemUsage))
+				output.FormatMillicores(p.CPURequest), output.FormatCores(p.CPUUsage),
+				output.FormatBytes(p.MemRequest), output.FormatBytes(p.MemUsage))
 		} else {
 			result += fmt.Sprintf("\n• `%s` — $%.2f/mo", p.Name, p.MonthlyCost)
 		}
@@ -374,31 +386,3 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 	resp.Body.Close()
 }
 
-func formatCores(cores float64) string {
-	m := cores * 1000
-	if m < 1 {
-		return "<1m"
-	}
-	if m >= 1000 {
-		return fmt.Sprintf("%.1f", cores)
-	}
-	return fmt.Sprintf("%.0fm", m)
-}
-
-func formatMillicores(m int64) string {
-	if m >= 1000 {
-		return fmt.Sprintf("%.1f", float64(m)/1000)
-	}
-	return fmt.Sprintf("%dm", m)
-}
-
-func formatBytes(b int64) string {
-	const (
-		gi = 1024 * 1024 * 1024
-		mi = 1024 * 1024
-	)
-	if b >= gi {
-		return fmt.Sprintf("%.1fGi", float64(b)/float64(gi))
-	}
-	return fmt.Sprintf("%dMi", b/mi)
-}

@@ -26,6 +26,10 @@ type CostReport struct {
 	TotalLBCost      float64      `json:"total_lb_cost,omitempty"`
 	TotalNetworkCost float64      `json:"total_network_cost,omitempty"`
 	TotalMonthlyCost float64      `json:"total_monthly_cost"` // compute + storage + LB + network
+
+	// Spot readiness
+	SpotReadiness []SpotReadiness `json:"spot_readiness,omitempty"`
+	SpotSavings   float64         `json:"spot_savings,omitempty"`
 }
 
 type NodeCost struct {

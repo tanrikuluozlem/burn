@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/tanrikuluozlem/burn
-  tag: v0.3.4
+  tag: v0.3.5
   pullPolicy: IfNotPresent
 
 serviceAccount:

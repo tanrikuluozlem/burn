@@ -7,7 +7,7 @@
 
 Your Kubernetes cluster is burning money. Find out where.
 
-[![demo](https://asciinema.org/a/8ujiH3nRqdwKOliI.svg)](https://asciinema.org/a/8ujiH3nRqdwKOliI)
+![demo](assets/demo.gif)
 
 No agent to deploy. No dashboard to maintain. No YAML to configure. Just install and run.
 
@@ -16,10 +16,11 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 ## Why burn
 
 - **Zero setup** — `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
-- **Full cost coverage** — Compute, storage, load balancers, and GPU costs. Fetches real-time pricing from AWS and Azure APIs.
+- **Full cost coverage** — Compute, storage, load balancers, and GPU costs with real-time cloud pricing.
 - **AI-powered** — Ask questions in plain English, get kubectl commands you can copy-paste.
 - **Slack-native** — `/burn` for instant cost reports. `/burn ask "..."` for AI analysis.
 - **Cloud + on-prem** — Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters.
+- **Spot readiness** — Identifies which workloads can safely move to spot instances with real-time discount and interruption rate.
 - **Ingress LB detection** — Detects load balancers from both Services and Ingress resources, with hostname deduplication.
 - **Time-aware** — `--period 7d` for weekly averages instead of point-in-time snapshots.
 
@@ -63,16 +64,16 @@ burn analyze --prometheus http://prometheus:9090 --period 7d
 
 # Drill into a namespace
 burn analyze --prometheus http://prometheus:9090 --namespace argocd
+
+# Spot readiness
+burn analyze --prometheus http://prometheus:9090 --spot
 ```
 
-```
-NAMESPACE: argocd (3 pods, $41.73/mo)
-──────────────────────────────────
-POD                 CPU REQ→USED  MEM REQ→USED   COST/MO
-argocd-deploy-0001  500m → 28m    512Mi → 299Mi  $13.91
-argocd-deploy-0002  500m → 1m     512Mi → 41Mi   $13.91
-argocd-deploy-0003  500m → 5m     512Mi → 7Mi    $13.91
-```
+## Spot readiness
+
+![spot readiness](assets/demo-spot.gif)
+
+Real-time spot discount and interruption rate per instance type.
 
 ## AI recommendations
 
@@ -120,7 +121,7 @@ is under 0.31m.
 
 ### Ask questions in plain English
 
-[![ask demo](https://asciinema.org/a/0nRl6Zj2pmpQIVsC.svg)](https://asciinema.org/a/0nRl6Zj2pmpQIVsC)
+![ask demo](assets/demo-ask.gif)
 
 Requires `ANTHROPIC_API_KEY` environment variable.
 
@@ -246,6 +247,7 @@ spec:
 | `--ram-price` | RAM cost per GiB per hour (on-prem) |
 | `--gpu-price` | GPU cost per unit per hour (on-prem) |
 | `--storage-price` | Storage cost per GiB per month (on-prem) |
+| `--spot` | Show spot instance readiness details |
 
 Cloud clusters use real pricing automatically. These flags are for on-premise clusters where pricing is not available from a cloud provider.
 

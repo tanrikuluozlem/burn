@@ -9,8 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"os"
+
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
+	"github.com/tanrikuluozlem/burn/internal/billing"
 	"github.com/tanrikuluozlem/burn/internal/collector"
 	"github.com/tanrikuluozlem/burn/internal/output"
 	"github.com/tanrikuluozlem/burn/internal/pricing"
@@ -159,7 +162,11 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) processSlackCommand(text, responseURL string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if text == "reconcile" {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	var response string
@@ -179,6 +186,8 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 		ns = strings.TrimPrefix(ns, "ns ")
 		ns = strings.TrimSpace(ns)
 		response, err = s.handleNamespace(ctx, ns)
+	case text == "reconcile":
+		response, err = s.handleReconcile(ctx)
 	case text == "" || text == "analyze":
 		response, err = s.handleAnalyze(ctx)
 	default:
@@ -285,6 +294,67 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 
 	summary += fmt.Sprintf("\n\n*Cost Breakdown:*\nCompute: $%.2f | Storage: $%.2f | LB: $%.2f | Network: $%.2f\n*Total: $%.2f/mo*",
 		report.MonthlyCost, report.TotalPVCost, report.TotalLBCost, report.TotalNetworkCost, report.TotalMonthlyCost)
+
+	return summary, nil
+}
+
+func (s *Server) handleReconcile(ctx context.Context) (string, error) {
+	cfg := billing.AthenaConfig{
+		Database:       os.Getenv("CUR_DATABASE"),
+		Table:          os.Getenv("CUR_TABLE"),
+		OutputLocation: os.Getenv("CUR_OUTPUT_LOCATION"),
+		WorkGroup:      os.Getenv("CUR_WORKGROUP"),
+		Region:         os.Getenv("CUR_REGION"),
+	}
+	if cfg.WorkGroup == "" {
+		cfg.WorkGroup = "primary"
+	}
+
+	if err := billing.ValidateAthenaConfig(cfg); err != nil {
+		return "CUR not configured. Set CUR_DATABASE, CUR_TABLE, CUR_OUTPUT_LOCATION env vars.", nil
+	}
+
+	athenaClient, err := billing.NewAthenaClient(ctx, cfg)
+	if err != nil {
+		return fmt.Sprintf("Athena connection failed: %v", err), nil
+	}
+
+	report, err := s.getReport(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	info, err := s.collector.Collect(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	end := time.Now().UTC().Add(-48 * time.Hour)
+	start := end.AddDate(0, 0, -7)
+
+	reconciler := billing.NewReconciler(athenaClient)
+	result, err := reconciler.Reconcile(ctx, report, info, start, end)
+	if err != nil {
+		return fmt.Sprintf("Reconciliation failed: %v", err), nil
+	}
+
+	summary := fmt.Sprintf("*CUR Reconciliation (%s - %s)*\n%s\n",
+		result.PeriodStart.Format("Jan 2"), result.PeriodEnd.Format("Jan 2, 2006"),
+		result.DataDelay)
+
+	summary += "\n*Nodes:*"
+	for _, n := range result.Nodes {
+		diff := ""
+		if n.ActualCost > 0 {
+			diff = fmt.Sprintf(" (%+.0f%%)", n.DifferencePercent)
+		}
+		summary += fmt.Sprintf("\n• `%s` %s — est $%.2f → actual $%.2f%s",
+			n.NodeName, n.PricingTerm, n.EstimatedMonthlyCost, n.ActualCost, diff)
+	}
+
+	summary += fmt.Sprintf("\n\n*Summary:*\nEstimated: $%.2f/mo\nActual: $%.2f/mo\nDifference: $%+.2f (%+.1f%%)",
+		result.TotalEstimatedCost, result.TotalActualCost,
+		result.TotalDifference, result.TotalDiffPercent)
 
 	return summary, nil
 }

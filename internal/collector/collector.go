@@ -431,6 +431,7 @@ func parseNode(node corev1.Node) NodeInfo {
 		GPUCount:       gpuCount,
 		GPUType:        gpuType,
 		IsSpot:         isSpotInstance(labels),
+		ProviderID:     node.Spec.ProviderID,
 		Labels:         labels,
 	}
 }

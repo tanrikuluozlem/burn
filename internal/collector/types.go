@@ -26,6 +26,7 @@ type NodeInfo struct {
 	GPUCount              int64
 	GPUType               string // e.g. "Tesla-T4", "A100"
 	IsSpot                bool
+	ProviderID            string
 	Labels         map[string]string
 	Pods           []PodInfo
 }

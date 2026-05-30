@@ -145,7 +145,10 @@ func getAWSPrice(ctx context.Context, client *pricing.Client, instanceType, loca
 			{Type: types.FilterTypeTermMatch, Field: aws.String("tenancy"), Value: aws.String("Shared")},
 			{Type: types.FilterTypeTermMatch, Field: aws.String("preInstalledSw"), Value: aws.String("NA")},
 			{Type: types.FilterTypeTermMatch, Field: aws.String("capacitystatus"), Value: aws.String("Used")},
+			// CRITICAL: Filter down to On-Demand records only
+			{Type: types.FilterTypeTermMatch, Field: aws.String("termType"), Value: aws.String("OnDemand")},
 		},
+		// Increase this slightly just in case, though 1 is fine if termType is specific
 		MaxResults: aws.Int32(1),
 	}
 
@@ -168,6 +171,7 @@ func parseAWSPriceJSON(priceJSON string) (float64, error) {
 					PricePerUnit struct {
 						USD string `json:"USD"`
 					} `json:"pricePerUnit"`
+					Description string `json:"description"`
 				} `json:"priceDimensions"`
 			} `json:"OnDemand"`
 		} `json:"terms"`
@@ -177,16 +181,22 @@ func parseAWSPriceJSON(priceJSON string) (float64, error) {
 		return 0, err
 	}
 
+	// Loop through the On-Demand offers (usually just one per product payload)
 	for _, offer := range data.Terms.OnDemand {
 		for _, dim := range offer.PriceDimensions {
-			if dim.PricePerUnit.USD != "" {
+			// CRITICAL: Ensure we are pulling the standard hourly rate dimension, 
+			// ignoring any alternative dimensions like data transfer or special fees.
+			if dim.PricePerUnit.USD != "" && strings.Contains(strings.ToLower(dim.Description), "per hour") {
 				var price float64
-				fmt.Sscanf(dim.PricePerUnit.USD, "%f", &price)
+				_, err := fmt.Sscanf(dim.PricePerUnit.USD, "%f", &price)
+				if err != nil {
+					return 0, err
+				}
 				return price, nil
 			}
 		}
 	}
-	return 0, fmt.Errorf("no USD price")
+	return 0, fmt.Errorf("no USD hourly price found")
 }
 
 func updateAzure() error {

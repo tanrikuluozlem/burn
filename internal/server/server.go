@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"os"
 
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
@@ -307,9 +306,8 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 }
 
 func (s *Server) handleReconcile(ctx context.Context, text string) (string, error) {
-	// Parse provider, subscription, and days from text
 	provider := "aws"
-	azureSubscription := os.Getenv("AZURE_SUBSCRIPTION_ID")
+	azureSubscription := ""
 	days := 7
 
 	args := strings.Fields(text)
@@ -348,6 +346,9 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 
 	switch provider {
 	case "azure":
+		if azureSubscription == "" {
+			azureSubscription = os.Getenv("AZURE_SUBSCRIPTION_ID")
+		}
 		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription}
 		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
 		if err != nil {

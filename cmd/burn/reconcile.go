@@ -70,9 +70,6 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		})))
 	}
 
-	if v := os.Getenv("AZURE_SUBSCRIPTION_ID"); v != "" && azureSubscription == "" {
-		azureSubscription = v
-	}
 	if v := os.Getenv("CUR_DATABASE"); v != "" && curDatabase == "" {
 		curDatabase = v
 	}
@@ -131,6 +128,9 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 
 	switch reconcileProvider {
 	case "azure":
+		if azureSubscription == "" {
+			azureSubscription = os.Getenv("AZURE_SUBSCRIPTION_ID")
+		}
 		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription}
 		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
 		if err != nil {
@@ -182,7 +182,10 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("ANTHROPIC_API_KEY not set")
 		}
 
-		resultJSON, _ := json.MarshalIndent(result, "", "  ")
+		resultJSON, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal reconciliation report: %w", err)
+		}
 		question := fmt.Sprintf("Analyze this CUR reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s", string(resultJSON))
 
 		fmt.Println("\nfetching AI analysis...")

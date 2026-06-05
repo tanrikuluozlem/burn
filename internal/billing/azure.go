@@ -160,7 +160,12 @@ func parseAzureCostResult(result armcostmanagement.QueryClientUsageResponse) []C
 			meterCategory, _ = row[meterCol].(string)
 		}
 
-		slog.Debug("azure cost row", "cost", cost, "resourceID", resourceID, "resourceType", resourceType, "meterCategory", meterCategory)
+		pricingModel := ""
+		if hasPricing && pricingCol < len(row) {
+			pricingModel, _ = row[pricingCol].(string)
+		}
+
+		slog.Debug("azure cost row", "cost", cost, "resourceID", resourceID, "resourceType", resourceType, "meterCategory", meterCategory, "pricingModel", pricingModel)
 
 		// Filter for VM-related resources
 		isVM := strings.Contains(strings.ToLower(resourceType), "virtualmachine") ||

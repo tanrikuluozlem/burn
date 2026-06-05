@@ -67,7 +67,7 @@ func AggregateCURByResource(items []CURLineItem) map[string]*AggregatedCost {
 		}
 
 		switch {
-		case strings.Contains(item.UsageType, "SpotUsage"):
+		case strings.Contains(item.UsageType, "SpotUsage") || item.PricingTerm == "Spot":
 			agg.SpotCost += item.EffectiveCost
 		case item.ReservationARN != "" || item.PricingTerm == "Reserved":
 			agg.RICost += item.EffectiveCost

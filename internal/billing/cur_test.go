@@ -81,6 +81,7 @@ func TestAggregateCURByResource(t *testing.T) {
 }
 
 func TestAggregateCURSpotDetection(t *testing.T) {
+	// AWS: spot detected via UsageType containing "SpotUsage"
 	items := []CURLineItem{
 		{ResourceID: "i-spot", EffectiveCost: 3, UsageAmount: 24, UsageType: "USE2-SpotUsage:t3.large"},
 	}
@@ -92,6 +93,30 @@ func TestAggregateCURSpotDetection(t *testing.T) {
 	}
 	if agg["i-spot"].SpotCost != 3 {
 		t.Errorf("spot cost = %f, want 3", agg["i-spot"].SpotCost)
+	}
+}
+
+func TestAggregateCURSpotDetectionAzure(t *testing.T) {
+	// Azure: spot detected via PricingTerm (not UsageType)
+	// Azure uses "BoxUsage" for all VM compute, spot is indicated by PricingModel dimension
+	items := []CURLineItem{
+		{ResourceID: "aks-spotpool-vmss", EffectiveCost: 0.20, UsageType: "BoxUsage", PricingTerm: "Spot"},
+		{ResourceID: "aks-spotpool-vmss", EffectiveCost: 0.001, UsageType: "DataTransfer", PricingTerm: "OnDemand"},
+	}
+
+	agg := AggregateCURByResource(items)
+
+	if agg["aks-spotpool-vmss"].PricingTerm != "Spot" {
+		t.Errorf("expected Spot, got %s", agg["aks-spotpool-vmss"].PricingTerm)
+	}
+	if agg["aks-spotpool-vmss"].SpotCost != 0.20 {
+		t.Errorf("spot cost = %f, want 0.20", agg["aks-spotpool-vmss"].SpotCost)
+	}
+	if agg["aks-spotpool-vmss"].ComputeCost != 0.20 {
+		t.Errorf("compute cost = %f, want 0.20", agg["aks-spotpool-vmss"].ComputeCost)
+	}
+	if agg["aks-spotpool-vmss"].DataTransferCost != 0.001 {
+		t.Errorf("transfer cost = %f, want 0.001", agg["aks-spotpool-vmss"].DataTransferCost)
 	}
 }
 

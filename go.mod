@@ -4,12 +4,12 @@ go 1.26.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.46.0
-	github.com/aws/aws-sdk-go-v2 v1.41.9
+	github.com/aws/aws-sdk-go-v2 v1.41.12
 	github.com/aws/aws-sdk-go-v2/config v1.32.20
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.25
 	github.com/aws/aws-sdk-go-v2/service/athena v1.57.6
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.304.2
-	github.com/aws/aws-sdk-go-v2/service/pricing v1.42.2
+	github.com/aws/aws-sdk-go-v2/service/pricing v1.42.5
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.20.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -20,8 +20,8 @@ require (
 
 require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.19 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.25 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.25 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.28 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.28 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.26 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.25 // indirect
@@ -29,7 +29,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.3 // indirect
-	github.com/aws/smithy-go v1.26.0 // indirect
+	github.com/aws/smithy-go v1.27.1 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect

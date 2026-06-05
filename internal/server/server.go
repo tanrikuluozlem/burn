@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -119,12 +120,19 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	text := strings.TrimSpace(r.FormValue("text"))
+	if len(text) > 4096 {
+		http.Error(w, "command too long", http.StatusBadRequest)
+		return
+	}
 	responseURL := r.FormValue("response_url")
 
 	// Validate response URL is from Slack
-	if responseURL != "" && !strings.HasPrefix(responseURL, "https://hooks.slack.com/") {
-		http.Error(w, "invalid response URL", http.StatusBadRequest)
-		return
+	if responseURL != "" {
+		parsedURL, parseErr := url.Parse(responseURL)
+		if parseErr != nil || parsedURL.Scheme != "https" || parsedURL.Host != "hooks.slack.com" {
+			http.Error(w, "invalid response URL", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Rate limit: reject if too many active requests
@@ -134,7 +142,7 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"response_type": "ephemeral",
-			"text":          "Too many requests. Please try again in a moment.",
+			"text":          "Rate limit exceeded. Try again shortly.",
 		})
 		return
 	}
@@ -186,17 +194,17 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 		ns = strings.TrimPrefix(ns, "ns ")
 		ns = strings.TrimSpace(ns)
 		response, err = s.handleNamespace(ctx, ns)
-	case text == "reconcile":
-		response, err = s.handleReconcile(ctx)
+	case text == "reconcile" || strings.HasPrefix(text, "reconcile "):
+		response, err = s.handleReconcile(ctx, text)
 	case text == "" || text == "analyze":
 		response, err = s.handleAnalyze(ctx)
 	default:
-		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn — namespace cost summary\n  /burn ns <name> — pod details\n  /burn ask \"your question\"", text)
+		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn — cost summary\n  /burn ns <name> — pod details\n  /burn ask \"question\" — AI analysis\n  /burn reconcile — AWS CUR reconciliation\n  /burn reconcile --provider azure --azure-subscription <id>\n  /burn reconcile --days 7", text)
 	}
 
 	if err != nil {
 		fmt.Printf("slack command error: %v\n", err)
-		response = "Something went wrong. Please try again."
+		response = fmt.Sprintf("Error: %v", err)
 	}
 
 	// Send response to Slack
@@ -298,25 +306,25 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 	return summary, nil
 }
 
-func (s *Server) handleReconcile(ctx context.Context) (string, error) {
-	cfg := billing.AthenaConfig{
-		Database:       os.Getenv("CUR_DATABASE"),
-		Table:          os.Getenv("CUR_TABLE"),
-		OutputLocation: os.Getenv("CUR_OUTPUT_LOCATION"),
-		WorkGroup:      os.Getenv("CUR_WORKGROUP"),
-		Region:         os.Getenv("CUR_REGION"),
-	}
-	if cfg.WorkGroup == "" {
-		cfg.WorkGroup = "primary"
-	}
+func (s *Server) handleReconcile(ctx context.Context, text string) (string, error) {
+	// Parse provider, subscription, and days from text
+	provider := "aws"
+	azureSubscription := os.Getenv("AZURE_SUBSCRIPTION_ID")
+	days := 7
 
-	if err := billing.ValidateAthenaConfig(cfg); err != nil {
-		return "CUR not configured. Set CUR_DATABASE, CUR_TABLE, CUR_OUTPUT_LOCATION env vars.", nil
-	}
-
-	athenaClient, err := billing.NewAthenaClient(ctx, cfg)
-	if err != nil {
-		return fmt.Sprintf("Athena connection failed: %v", err), nil
+	args := strings.Fields(text)
+	for i, arg := range args {
+		if arg == "--provider" && i+1 < len(args) {
+			provider = args[i+1]
+		}
+		if arg == "--azure-subscription" && i+1 < len(args) {
+			azureSubscription = args[i+1]
+		}
+		if arg == "--days" && i+1 < len(args) {
+			if d, err := fmt.Sscanf(args[i+1], "%d", &days); err != nil || d != 1 || days < 1 {
+				days = 7
+			}
+		}
 	}
 
 	report, err := s.getReport(ctx)
@@ -329,16 +337,59 @@ func (s *Server) handleReconcile(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	end := time.Now().UTC().Add(-48 * time.Hour)
-	start := end.AddDate(0, 0, -7)
+	dataDelay := 48 * time.Hour
+	if provider == "azure" {
+		dataDelay = 24 * time.Hour
+	}
+	end := time.Now().UTC().Add(-dataDelay)
+	start := end.AddDate(0, 0, -days)
 
-	reconciler := billing.NewReconciler(athenaClient)
-	result, err := reconciler.Reconcile(ctx, report, info, start, end)
-	if err != nil {
-		return fmt.Sprintf("Reconciliation failed: %v", err), nil
+	var result *billing.ReconciliationReport
+
+	switch provider {
+	case "azure":
+		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription}
+		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
+		if err != nil {
+			return fmt.Sprintf("Azure connection failed: %v", err), nil
+		}
+		estimatedCosts := make(map[string]float64)
+		for _, n := range report.Nodes {
+			estimatedCosts[n.Name] = n.MonthlyPrice
+		}
+		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, start, end, float64(days))
+		if err != nil {
+			return fmt.Sprintf("Azure cost query failed: %v", err), nil
+		}
+	default:
+		cfg := billing.AthenaConfig{
+			Database:       os.Getenv("CUR_DATABASE"),
+			Table:          os.Getenv("CUR_TABLE"),
+			OutputLocation: os.Getenv("CUR_OUTPUT_LOCATION"),
+			WorkGroup:      os.Getenv("CUR_WORKGROUP"),
+			Region:         os.Getenv("CUR_REGION"),
+		}
+		if cfg.WorkGroup == "" {
+			cfg.WorkGroup = "primary"
+		}
+
+		if err := billing.ValidateAthenaConfig(cfg); err != nil {
+			return "CUR not configured. Set CUR_DATABASE, CUR_TABLE, CUR_OUTPUT_LOCATION env vars.", nil
+		}
+
+		athenaClient, err := billing.NewAthenaClient(ctx, cfg)
+		if err != nil {
+			return fmt.Sprintf("Athena connection failed: %v", err), nil
+		}
+
+		reconciler := billing.NewReconciler(athenaClient)
+		result, err = reconciler.Reconcile(ctx, report, info, start, end)
+		if err != nil {
+			return fmt.Sprintf("Reconciliation failed: %v", err), nil
+		}
 	}
 
-	summary := fmt.Sprintf("*CUR Reconciliation (%s - %s)*\n%s\n",
+	summary := fmt.Sprintf("*Reconciliation (%s - %s)*\n%s\n",
 		result.PeriodStart.Format("Jan 2"), result.PeriodEnd.Format("Jan 2, 2006"),
 		result.DataDelay)
 

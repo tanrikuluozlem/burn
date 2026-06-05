@@ -65,9 +65,6 @@ func (r *Reconciler) Reconcile(
 	var riSavings, spSavings, spotSavings float64
 
 	for _, n := range nodes {
-		if n.MatchMethod == "unmatched" {
-			continue
-		}
 		totalEst += n.EstimatedMonthlyCost
 		totalActual += n.ActualCost
 
@@ -150,7 +147,7 @@ func reconcileNamespaces(
 
 		if splitCosts != nil && periodDays > 0 {
 			if cost, ok := splitCosts[ns.Name]; ok {
-				actualCost = cost / periodDays * 30.44
+				actualCost = cost / periodDays * (730.0 / 24.0)
 				hasSplit = true
 			}
 		}

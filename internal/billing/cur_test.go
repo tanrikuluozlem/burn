@@ -16,6 +16,8 @@ func TestParseProviderID(t *testing.T) {
 		{"aws:///us-east-1a/i-0abc123def", "i-0abc123def"},
 		{"aws:///eu-central-1a/i-0xyz789", "i-0xyz789"},
 		{"azure:///subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/aks-node-0", "aks-node-0"},
+		{"azure:///subscriptions/sub-1/resourceGroups/mc_rg/providers/Microsoft.Compute/virtualMachineScaleSets/aks-nodepool1-123-vmss/virtualMachines/0", "aks-nodepool1-123-vmss/0"},
+		{"azure:///subscriptions/sub-1/resourceGroups/mc_rg/providers/Microsoft.Compute/virtualMachineScaleSets/aks-pool2-456-vmss/virtualMachines/3", "aks-pool2-456-vmss/3"},
 		{"gce://project/zone/instance-name", "instance-name"},
 		{"", ""},
 		{"i-standalone", "i-standalone"},
@@ -79,6 +81,7 @@ func TestAggregateCURByResource(t *testing.T) {
 }
 
 func TestAggregateCURSpotDetection(t *testing.T) {
+	// AWS: spot detected via UsageType containing "SpotUsage"
 	items := []CURLineItem{
 		{ResourceID: "i-spot", EffectiveCost: 3, UsageAmount: 24, UsageType: "USE2-SpotUsage:t3.large"},
 	}
@@ -90,6 +93,30 @@ func TestAggregateCURSpotDetection(t *testing.T) {
 	}
 	if agg["i-spot"].SpotCost != 3 {
 		t.Errorf("spot cost = %f, want 3", agg["i-spot"].SpotCost)
+	}
+}
+
+func TestAggregateCURSpotDetectionAzure(t *testing.T) {
+	// Azure: spot detected via PricingTerm (not UsageType)
+	// Azure uses "BoxUsage" for all VM compute, spot is indicated by PricingModel dimension
+	items := []CURLineItem{
+		{ResourceID: "aks-spotpool-vmss", EffectiveCost: 0.20, UsageType: "BoxUsage", PricingTerm: "Spot"},
+		{ResourceID: "aks-spotpool-vmss", EffectiveCost: 0.001, UsageType: "DataTransfer", PricingTerm: "OnDemand"},
+	}
+
+	agg := AggregateCURByResource(items)
+
+	if agg["aks-spotpool-vmss"].PricingTerm != "Spot" {
+		t.Errorf("expected Spot, got %s", agg["aks-spotpool-vmss"].PricingTerm)
+	}
+	if agg["aks-spotpool-vmss"].SpotCost != 0.20 {
+		t.Errorf("spot cost = %f, want 0.20", agg["aks-spotpool-vmss"].SpotCost)
+	}
+	if agg["aks-spotpool-vmss"].ComputeCost != 0.20 {
+		t.Errorf("compute cost = %f, want 0.20", agg["aks-spotpool-vmss"].ComputeCost)
+	}
+	if agg["aks-spotpool-vmss"].DataTransferCost != 0.001 {
+		t.Errorf("transfer cost = %f, want 0.001", agg["aks-spotpool-vmss"].DataTransferCost)
 	}
 }
 

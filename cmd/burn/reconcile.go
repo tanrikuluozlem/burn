@@ -19,20 +19,22 @@ import (
 )
 
 var (
-	curDatabase    string
-	curTable       string
-	curOutputLoc   string
-	curWorkgroup   string
-	curRegion      string
-	curDays        int
-	reconcileOut   string
-	reconcileAI    bool
-	reconcileSetup bool
+	curDatabase      string
+	curTable         string
+	curOutputLoc     string
+	curWorkgroup     string
+	curRegion        string
+	curDays          int
+	reconcileOut     string
+	reconcileAI      bool
+	reconcileSetup   bool
+	reconcileProvider string
+	azureSubscription string
 )
 
 var reconcileCmd = &cobra.Command{
 	Use:   "reconcile",
-	Short: "Compare estimated costs with actual AWS bill",
+	Short: "Compare estimated costs with actual cloud bill",
 	RunE:  runReconcile,
 }
 
@@ -48,7 +50,9 @@ func init() {
 	f.StringVar(&kubecontext, "context", "", "kubeconfig context to use")
 	f.StringVarP(&reconcileOut, "output", "o", "table", "output format (table|json)")
 	f.BoolVar(&reconcileAI, "ai", false, "get AI analysis of reconciliation results")
-	f.BoolVar(&reconcileSetup, "setup", false, "show CUR + Athena setup instructions")
+	f.BoolVar(&reconcileSetup, "setup", false, "show setup instructions")
+	f.StringVar(&reconcileProvider, "provider", "aws", "cloud provider (aws|azure)")
+	f.StringVar(&azureSubscription, "azure-subscription", "", "Azure subscription ID (or AZURE_SUBSCRIPTION_ID env)")
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 
 	rootCmd.AddCommand(reconcileCmd)
@@ -90,19 +94,6 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	athenaCfg := billing.AthenaConfig{
-		Database:       curDatabase,
-		Table:          curTable,
-		OutputLocation: curOutputLoc,
-		WorkGroup:      curWorkgroup,
-		Region:         curRegion,
-	}
-
-	athenaClient, err := billing.NewAthenaClient(ctx, athenaCfg)
-	if err != nil {
-		return err
-	}
-
 	prometheusURL := os.Getenv("PROMETHEUS_URL")
 	coll, err := collector.New(kubeconfig, kubecontext, "", prometheusURL, "")
 	if err != nil {
@@ -125,16 +116,55 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	end := time.Now().UTC().Add(-48 * time.Hour)
+	// Azure cost data typically available within 24h, AWS CUR within 48h
+	dataDelay := 48 * time.Hour
+	if reconcileProvider == "azure" {
+		dataDelay = 24 * time.Hour
+	}
+	end := time.Now().UTC().Add(-dataDelay)
 	start := end.AddDate(0, 0, -curDays)
 
-	fmt.Printf("Querying CUR via Athena (%s to %s)...\n",
-		start.Format("Jan 2"), end.Format("Jan 2, 2006"))
+	var result *billing.ReconciliationReport
 
-	reconciler := billing.NewReconciler(athenaClient)
-	result, err := reconciler.Reconcile(ctx, report, info, start, end)
-	if err != nil {
-		return err
+	switch reconcileProvider {
+	case "azure":
+		if azureSubscription == "" {
+			azureSubscription = os.Getenv("AZURE_SUBSCRIPTION_ID")
+		}
+		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription}
+		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Querying Azure Cost Management (%s to %s)...\n",
+			start.Format("Jan 2"), end.Format("Jan 2, 2006"))
+		estimatedCosts := make(map[string]float64)
+		for _, n := range report.Nodes {
+			estimatedCosts[n.Name] = n.MonthlyPrice
+		}
+		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, start, end, float64(curDays))
+		if err != nil {
+			return err
+		}
+	default:
+		athenaCfg := billing.AthenaConfig{
+			Database:       curDatabase,
+			Table:          curTable,
+			OutputLocation: curOutputLoc,
+			WorkGroup:      curWorkgroup,
+			Region:         curRegion,
+		}
+		athenaClient, err := billing.NewAthenaClient(ctx, athenaCfg)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Querying CUR via Athena (%s to %s)...\n",
+			start.Format("Jan 2"), end.Format("Jan 2, 2006"))
+		reconciler := billing.NewReconciler(athenaClient)
+		result, err = reconciler.Reconcile(ctx, report, info, start, end)
+		if err != nil {
+			return err
+		}
 	}
 
 	switch reconcileOut {
@@ -152,17 +182,19 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("ANTHROPIC_API_KEY not set")
 		}
 
-		resultJSON, _ := json.MarshalIndent(result, "", "  ")
+		resultJSON, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal reconciliation report: %w", err)
+		}
 		question := fmt.Sprintf("Analyze this CUR reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s", string(resultJSON))
 
 		fmt.Println("\nfetching AI analysis...")
-		answer, err := advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
+		_, err = advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
 			fmt.Print(text)
 		})
 		if err != nil {
 			return err
 		}
-		_ = answer
 		fmt.Println()
 	}
 

@@ -123,6 +123,11 @@ func (p *AWSProvider) getOnDemandPrice(ctx context.Context, instanceType, region
 				Field: aws.String("capacitystatus"),
 				Value: aws.String("Used"),
 			},
+			{
+				Type:  types.FilterTypeTermMatch,
+				Field: aws.String("termType"),
+				Value: aws.String("OnDemand"),
+			},
 		},
 		MaxResults: aws.Int32(1),
 	}

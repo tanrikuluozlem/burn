@@ -73,7 +73,7 @@ func CheckSpotReadiness(workloads []collector.WorkloadInfo) []SpotReadiness {
 			continue
 		}
 
-		if w.PDBFound {
+		if w.PDBFound && w.Replicas > 0 {
 			minAvail := w.PDBMinAvailable
 			if w.PDBMaxUnavailable > 0 {
 				minAvail = w.Replicas - w.PDBMaxUnavailable

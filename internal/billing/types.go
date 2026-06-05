@@ -55,9 +55,6 @@ type NodeReconciliation struct {
 	ActualTransferCost   float64
 	ActualHours          float64
 	PricingTerm          string
-	DiscountApplied      float64
-	ReservationARN       string
-	SavingsPlanARN       string
 
 	CostDifference    float64
 	DifferencePercent float64

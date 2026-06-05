@@ -16,6 +16,8 @@ func TestParseProviderID(t *testing.T) {
 		{"aws:///us-east-1a/i-0abc123def", "i-0abc123def"},
 		{"aws:///eu-central-1a/i-0xyz789", "i-0xyz789"},
 		{"azure:///subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/aks-node-0", "aks-node-0"},
+		{"azure:///subscriptions/sub-1/resourceGroups/mc_rg/providers/Microsoft.Compute/virtualMachineScaleSets/aks-nodepool1-123-vmss/virtualMachines/0", "aks-nodepool1-123-vmss/0"},
+		{"azure:///subscriptions/sub-1/resourceGroups/mc_rg/providers/Microsoft.Compute/virtualMachineScaleSets/aks-pool2-456-vmss/virtualMachines/3", "aks-pool2-456-vmss/3"},
 		{"gce://project/zone/instance-name", "instance-name"},
 		{"", ""},
 		{"i-standalone", "i-standalone"},

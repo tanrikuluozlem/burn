@@ -95,7 +95,6 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println()
-	_ = answer
 
 	if askSlack {
 		webhook := askSlackWebhook

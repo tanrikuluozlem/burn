@@ -132,7 +132,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	report.Period = period
+	report.Period = coll.Period()
 
 	// When --ai + --namespace: show namespace pods, AI gets full cluster
 	if withAI && namespace != "" {
@@ -143,7 +143,15 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 			}
 		}
 		if len(nsPods) > 0 {
-			outputNamespacePods(nsPods, report.MetricsSource == "prometheus")
+			var nsPVCs []analyzer.PVCost
+			var nsPVCost float64
+			for _, pv := range report.PVCosts {
+				if pv.Namespace == namespace {
+					nsPVCs = append(nsPVCs, pv)
+					nsPVCost += pv.MonthlyCost
+				}
+			}
+			outputNamespacePods(nsPods, report.MetricsSource == "prometheus", nsPVCs, nsPVCost)
 		}
 	}
 
@@ -235,8 +243,17 @@ func outputTable(report *analyzer.CostReport) {
 	// Namespace detail view
 	if namespace != "" {
 		fmt.Println()
+		// Filter PVCs for this namespace
+		var nsPVCost float64
+		var nsPVCs []analyzer.PVCost
+		for _, pv := range report.PVCosts {
+			if pv.Namespace == namespace {
+				nsPVCs = append(nsPVCs, pv)
+				nsPVCost += pv.MonthlyCost
+			}
+		}
 		if len(report.AllPods) > 0 {
-			outputNamespacePods(report.AllPods, hasPrometheus)
+			outputNamespacePods(report.AllPods, hasPrometheus, nsPVCs, nsPVCost)
 		} else {
 			fmt.Printf("No pods found in namespace %s\n", namespace)
 		}
@@ -275,7 +292,7 @@ func outputTable(report *analyzer.CostReport) {
 	w.Flush()
 
 	if len(report.Namespaces) > 0 {
-		outputNamespaceSummary(report.Namespaces, hasPrometheus, report.MonthlyCost)
+		outputNamespaceSummary(report.Namespaces, hasPrometheus, report.MonthlyCost, report.TotalIdleCost)
 	}
 
 	if len(report.PVCosts) > 0 {
@@ -349,7 +366,7 @@ func outputTable(report *analyzer.CostReport) {
 
 }
 
-func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus bool, monthlyCost float64) {
+func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus bool, monthlyCost, idleCost float64) {
 	fmt.Println("\nNAMESPACES")
 	fmt.Println("──────────")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -359,9 +376,7 @@ func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus b
 		fmt.Fprintln(w, "NAMESPACE\tPODS\tCPU REQ\tMEM REQ\tCOST/MO")
 	}
 
-	var allocated float64
 	for _, ns := range namespaces {
-		allocated += ns.MonthlyCost
 		if hasPrometheus {
 			fmt.Fprintf(w, "%s\t%d\t%s → %s\t%s → %s\t$%.2f\n",
 				ofmt.Truncate(ns.Name, 25),
@@ -379,21 +394,21 @@ func outputNamespaceSummary(namespaces []analyzer.NamespaceCost, hasPrometheus b
 		}
 	}
 
-	idle := monthlyCost - allocated
 	w.Flush()
-	if idle > 0 {
-		fmt.Printf("%-25s%s$%.2f\n", "Idle (unallocated)", "                              ", idle)
+	if idleCost > 0 {
+		fmt.Printf("%-25s%s$%.2f\n", "Idle (unallocated)", "                              ", idleCost)
 		fmt.Println("─────────────────────────────────────────────────────────")
 		fmt.Printf("%-25s%s$%.2f\n", "Total", "                              ", monthlyCost)
 	}
 }
 
-func outputNamespacePods(pods []analyzer.PodEfficiency, hasPrometheus bool) {
+func outputNamespacePods(pods []analyzer.PodEfficiency, hasPrometheus bool, pvcs []analyzer.PVCost, pvCost float64) {
 	ns := pods[0].Namespace
-	var totalCost float64
+	var computeCost float64
 	for _, p := range pods {
-		totalCost += p.MonthlyCost
+		computeCost += p.MonthlyCost
 	}
+	totalCost := computeCost + pvCost
 	fmt.Printf("\nNAMESPACE: %s (%d pods, $%.2f/mo)\n", ns, len(pods), totalCost)
 	fmt.Println("──────────────────────────────────")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -418,10 +433,18 @@ func outputNamespacePods(pods []analyzer.PodEfficiency, hasPrometheus bool) {
 		}
 	}
 	w.Flush()
+
+	if len(pvcs) > 0 {
+		fmt.Println("\nSTORAGE")
+		w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "PVC\tCLASS\tSIZE\tCOST/MO")
+		for _, pv := range pvcs {
+			fmt.Fprintf(w, "%s\t%s\t%.0fGi\t$%.2f\n",
+				ofmt.Truncate(pv.Name, 30), pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
+		}
+		w.Flush()
+	}
 }
-
-
-
 
 func interruptionLabel(rate int) string {
 	switch rate {

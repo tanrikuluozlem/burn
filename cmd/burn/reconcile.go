@@ -30,6 +30,8 @@ var (
 	reconcileSetup   bool
 	reconcileProvider string
 	azureSubscription string
+	azureCostType     string
+	dataDelayHours    int
 )
 
 var reconcileCmd = &cobra.Command{
@@ -53,6 +55,8 @@ func init() {
 	f.BoolVar(&reconcileSetup, "setup", false, "show setup instructions")
 	f.StringVar(&reconcileProvider, "provider", "aws", "cloud provider (aws|azure)")
 	f.StringVar(&azureSubscription, "azure-subscription", "", "Azure subscription ID (or AZURE_SUBSCRIPTION_ID env)")
+	f.StringVar(&azureCostType, "cost-type", "amortized", "Azure cost type (amortized|actual)")
+	f.IntVar(&dataDelayHours, "data-delay", 48, "billing data delay in hours (default 48, use 72 for Azure PAYG)")
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 
 	rootCmd.AddCommand(reconcileCmd)
@@ -89,6 +93,9 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 	if curDays < 1 {
 		return fmt.Errorf("--days must be at least 1")
 	}
+	if curDays > 365 {
+		return fmt.Errorf("--days must be at most 365")
+	}
 
 	timeout := time.Duration(curDays+5) * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -105,7 +112,7 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	fmt.Println("Collecting cluster data...")
+	fmt.Fprintln(os.Stderr, "Collecting cluster data...")
 	info, err := coll.Collect(ctx)
 	if err != nil {
 		return err
@@ -116,11 +123,7 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Azure cost data typically available within 24h, AWS CUR within 48h
-	dataDelay := 48 * time.Hour
-	if reconcileProvider == "azure" {
-		dataDelay = 24 * time.Hour
-	}
+	dataDelay := time.Duration(dataDelayHours) * time.Hour
 	end := time.Now().UTC().Add(-dataDelay)
 	start := end.AddDate(0, 0, -curDays)
 
@@ -131,18 +134,26 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		if azureSubscription == "" {
 			azureSubscription = os.Getenv("AZURE_SUBSCRIPTION_ID")
 		}
-		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription}
+		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription, CostType: azureCostType}
 		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Querying Azure Cost Management (%s to %s)...\n",
+		fmt.Fprintf(os.Stderr, "Querying Azure Cost Management (%s to %s)...\n",
 			start.Format("Jan 2"), end.Format("Jan 2, 2006"))
 		estimatedCosts := make(map[string]float64)
 		for _, n := range report.Nodes {
 			estimatedCosts[n.Name] = n.MonthlyPrice
 		}
-		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, start, end, float64(curDays))
+		pvEstimates := make(map[string]float64)
+		for _, pv := range report.PVCosts {
+			pvEstimates[pv.Namespace+"/"+pv.Name] = pv.MonthlyCost
+		}
+		lbEstimates := make(map[string]float64)
+		for _, lb := range report.LBCosts {
+			lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
+		}
+		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, float64(curDays))
 		if err != nil {
 			return err
 		}
@@ -158,12 +169,22 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Querying CUR via Athena (%s to %s)...\n",
+		fmt.Fprintf(os.Stderr, "Querying CUR via Athena (%s to %s)...\n",
 			start.Format("Jan 2"), end.Format("Jan 2, 2006"))
 		reconciler := billing.NewReconciler(athenaClient)
 		result, err = reconciler.Reconcile(ctx, report, info, start, end)
 		if err != nil {
 			return err
+		}
+	}
+
+	// Enrich coverage gaps with real RI pricing from cloud APIs
+	for i := range result.CoverageGaps {
+		gap := &result.CoverageGaps[i]
+		saving, pct, ok := pp.GetRISaving(ctx, gap.InstanceType, gap.Region)
+		if ok {
+			gap.PotentialSaving = saving
+			gap.Recommendation = fmt.Sprintf("$%.0f/mo (%.0f%% off) with 1yr Reserved Instance", saving, pct)
 		}
 	}
 
@@ -173,7 +194,7 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(result)
 	default:
-		outputReconcileTable(result)
+		outputReconcileTable(result, reconcileProvider)
 	}
 
 	if reconcileAI {
@@ -186,7 +207,11 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("marshal reconciliation report: %w", err)
 		}
-		question := fmt.Sprintf("Analyze this CUR reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s", string(resultJSON))
+		source := "CUR"
+		if reconcileProvider == "azure" {
+			source = "Azure Cost Management"
+		}
+		question := fmt.Sprintf("Analyze this %s reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s", source, string(resultJSON))
 
 		fmt.Println("\nfetching AI analysis...")
 		_, err = advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
@@ -201,10 +226,14 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func outputReconcileTable(r *billing.ReconciliationReport) {
+func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 	fmt.Println()
-	fmt.Printf("CUR Reconciliation (%s - %s)\n",
-		r.PeriodStart.Format("Jan 2"), r.PeriodEnd.Format("Jan 2, 2006"))
+	title := "CUR Reconciliation"
+	if provider == "azure" {
+		title = "Azure Cost Reconciliation"
+	}
+	fmt.Printf("%s (%s - %s)\n",
+		title, r.PeriodStart.Format("Jan 2"), r.PeriodEnd.Format("Jan 2, 2006"))
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("Note: %s\n", r.DataDelay)
 
@@ -238,18 +267,87 @@ func outputReconcileTable(r *billing.ReconciliationReport) {
 	}
 	w.Flush()
 
-	if r.RINodeCount > 0 || r.SPNodeCount > 0 || r.SpotNodeCount > 0 {
+	if r.TotalRISavings >= 0.005 || r.TotalSPSavings >= 0.005 || r.TotalSpotSavings >= 0.005 {
 		fmt.Println("\nDISCOUNTS")
 		fmt.Println("─────────")
-		if r.RINodeCount > 0 {
-			fmt.Printf("Reserved Instances: %d nodes, saving $%.2f/mo\n", r.RINodeCount, r.TotalRISavings)
+		if r.TotalRISavings >= 0.005 {
+			riCovered := 0
+			for _, n := range r.Nodes {
+				if n.RICost > 0 {
+					riCovered++
+				}
+			}
+			fmt.Printf("Reserved Instances: %d nodes, saving $%.2f/mo\n", riCovered, r.TotalRISavings)
 		}
-		if r.SPNodeCount > 0 {
-			fmt.Printf("Savings Plans:      %d nodes, saving $%.2f/mo\n", r.SPNodeCount, r.TotalSPSavings)
+		if r.TotalSPSavings >= 0.005 {
+			spCovered := 0
+			for _, n := range r.Nodes {
+				if n.SPCost > 0 {
+					spCovered++
+				}
+			}
+			fmt.Printf("Savings Plans:      %d nodes, saving $%.2f/mo\n", spCovered, r.TotalSPSavings)
 		}
-		if r.SpotNodeCount > 0 {
+		if r.TotalSpotSavings >= 0.005 {
 			fmt.Printf("Spot:               %d nodes, saving $%.2f/mo\n", r.SpotNodeCount, r.TotalSpotSavings)
 		}
+	}
+
+	if len(r.Disks) > 0 || len(r.OrphanedDisks) > 0 {
+		fmt.Println("\nSTORAGE")
+		fmt.Println("───────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "DISK\tTYPE\tEST/MO\tACTUAL/MO\tDIFF")
+		for _, d := range r.Disks {
+			diff := ""
+			if d.EstimatedCost > 0 {
+				diff = fmt.Sprintf("%+.0f%%", d.DiffPercent)
+			}
+			label := d.PVCNamespace + "/" + d.PVCName
+			if d.MatchMethod == "os-disk" {
+				label = d.PVCName // "(OS disk)"
+			}
+			fmt.Fprintf(w, "%s\t%s\t$%.2f\t$%.2f\t%s\n",
+				ofmt.Truncate(d.DiskName, 25), ofmt.Truncate(label, 20),
+				d.EstimatedCost, d.ActualCost, diff)
+		}
+		for _, d := range r.OrphanedDisks {
+			fmt.Fprintf(w, "%s\t%s\t—\t$%.2f\t—\n",
+				ofmt.Truncate(d.DiskName, 25), "(orphaned)", d.ActualCost)
+		}
+		w.Flush()
+	}
+
+	if len(r.LoadBalancers) > 0 {
+		fmt.Println("\nLOAD BALANCERS")
+		fmt.Println("──────────────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tSERVICE\tEST/MO\tACTUAL/MO\tDIFF")
+		for _, lb := range r.LoadBalancers {
+			diff := ""
+			if lb.EstimatedCost > 0 {
+				diff = fmt.Sprintf("%+.0f%%", lb.DiffPercent)
+			}
+			svc := lb.ServiceNamespace + "/" + lb.ServiceName
+			if lb.IsOrphaned {
+				svc = "(orphaned)"
+			}
+			fmt.Fprintf(w, "%s\t%s\t$%.2f\t$%.2f\t%s\n",
+				ofmt.Truncate(lb.LBName, 25), ofmt.Truncate(svc, 25),
+				lb.EstimatedCost, lb.ActualCost, diff)
+		}
+		w.Flush()
+	}
+
+	if len(r.PublicIPs) > 0 {
+		fmt.Println("\nPUBLIC IPs")
+		fmt.Println("──────────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tACTUAL/MO")
+		for _, ip := range r.PublicIPs {
+			fmt.Fprintf(w, "%s\t$%.2f\n", ofmt.Truncate(ip.Name, 30), ip.ActualCost)
+		}
+		w.Flush()
 	}
 
 	if len(r.Namespaces) > 0 {
@@ -285,11 +383,74 @@ func outputReconcileTable(r *billing.ReconciliationReport) {
 		}
 	}
 
+	if len(r.CoverageGaps) > 0 {
+		fmt.Println("\nCOVERAGE GAPS")
+		fmt.Println("─────────────")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NODE\tTYPE\tCOST/MO\tPOTENTIAL SAVING")
+		var totalSaving float64
+		for _, g := range r.CoverageGaps {
+			fmt.Fprintf(w, "%s\t%s\t$%.2f\t%s\n",
+				ofmt.Truncate(g.NodeName, 25), g.InstanceType,
+				g.MonthlyCost, g.Recommendation)
+			totalSaving += g.PotentialSaving
+		}
+		w.Flush()
+		fmt.Printf("  %d on-demand nodes could save $%.0f/mo with Reserved Instances\n",
+			len(r.CoverageGaps), totalSaving)
+	}
+
 	fmt.Println("\nSUMMARY")
 	fmt.Println("━━━━━━━")
-	fmt.Printf("Estimated: $%.2f/mo\n", r.TotalEstimatedCost)
-	fmt.Printf("Actual:    $%.2f/mo\n", r.TotalActualCost)
-	fmt.Printf("Difference: $%+.2f (%+.1f%%)\n", r.TotalDifference, r.TotalDiffPercent)
+	if r.InfraCost != nil {
+		fmt.Printf("                  Estimated    Actual\n")
+		fmt.Printf("Compute:          $%-12.2f $%.2f\n", r.InfraCost.ComputeEstimated, r.InfraCost.ComputeActual)
+		if r.InfraCost.DiskActual > 0 || r.InfraCost.DiskEstimated > 0 {
+			fmt.Printf("Storage:          $%-12.2f $%.2f\n", r.InfraCost.DiskEstimated, r.InfraCost.DiskActual)
+		}
+		if r.InfraCost.LBActual > 0 || r.InfraCost.LBEstimated > 0 {
+			fmt.Printf("Load Balancers:   $%-12.2f $%.2f\n", r.InfraCost.LBEstimated, r.InfraCost.LBActual)
+		}
+		if r.InfraCost.PublicIPActual > 0 {
+			fmt.Printf("Public IPs:       %-13s $%.2f\n", "—", r.InfraCost.PublicIPActual)
+		}
+		if r.InfraCost.ManagementFee > 0 {
+			fmt.Printf("Management Fee:   %-13s $%.2f\n", "—", r.InfraCost.ManagementFee)
+		}
+		fmt.Println("────────────────────────────────────")
+		fmt.Printf("Total:            $%-12.2f $%.2f\n", r.InfraCost.TotalEstimated, r.InfraCost.TotalActual)
+		totalDiff := r.InfraCost.TotalActual - r.InfraCost.TotalEstimated
+		totalDiffPct := 0.0
+		if r.InfraCost.TotalEstimated > 0 {
+			totalDiffPct = totalDiff / r.InfraCost.TotalEstimated * 100
+		}
+		fmt.Printf("Difference:       $%+.2f (%+.1f%%)\n", totalDiff, totalDiffPct)
+
+		// Show actual period spend (what Azure/AWS actually charged)
+		days := r.PeriodEnd.Sub(r.PeriodStart).Hours() / 24
+		if days > 0 {
+			periodSpend := r.InfraCost.TotalActual / billing.DaysPerMonth * days
+			fmt.Printf("\nPeriod spend:     $%.2f (%.0f days)\n", periodSpend, days)
+		}
+	} else {
+		fmt.Printf("Estimated: $%.2f/mo\n", r.TotalEstimatedCost)
+		fmt.Printf("Actual:    $%.2f/mo\n", r.TotalActualCost)
+		fmt.Printf("Difference: $%+.2f (%+.1f%%)\n", r.TotalDifference, r.TotalDiffPercent)
+
+		days := r.PeriodEnd.Sub(r.PeriodStart).Hours() / 24
+		if days > 0 {
+			periodSpend := r.TotalActualCost / billing.DaysPerMonth * days
+			fmt.Printf("\nPeriod spend:     $%.2f (%.0f days)\n", periodSpend, days)
+		}
+	}
+
+	if len(r.Warnings) > 0 {
+		fmt.Println("\nWARNINGS")
+		fmt.Println("────────")
+		for _, w := range r.Warnings {
+			fmt.Printf("  %s\n", w)
+		}
+	}
 
 	if r.UnmatchedNodes > 0 || r.UnmatchedCURItems > 0 || r.DaysFailed > 0 {
 		fmt.Print("\nDiagnostics:")
@@ -310,8 +471,16 @@ func outputReconcileTable(r *billing.ReconciliationReport) {
 }
 
 func printSetupGuide() {
-	fmt.Println(`CUR Reconciliation Setup Guide
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	if reconcileProvider == "azure" {
+		printAzureSetupGuide()
+	} else {
+		printAWSSetupGuide()
+	}
+}
+
+func printAWSSetupGuide() {
+	fmt.Println(`AWS CUR Reconciliation Setup Guide
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Step 1: Enable CUR 2.0
   AWS Console → Billing → Data Exports → Create export
@@ -344,9 +513,58 @@ Step 5: Run reconciliation
     --cur-region YOUR-REGION \
     --days 7
 
-IAM Policy (minimum permissions):
+IAM permissions:
   athena:StartQueryExecution, athena:GetQueryExecution,
   athena:GetQueryResults, athena:StopQueryExecution,
   s3:GetObject, s3:PutObject, s3:ListBucket,
   glue:GetTable, glue:GetPartitions, glue:GetDatabase`)
+}
+
+func printAzureSetupGuide() {
+	fmt.Println(`Azure Cost Reconciliation Setup Guide
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Prerequisites:
+  - Pay-As-You-Go, EA, or MCA subscription (not Free Trial)
+  - Cost Management API access
+
+Step 1: Find your subscription ID
+  az account show --query id -o tsv
+
+Step 2: Authenticate
+  Option A — Interactive (local development):
+    az login
+
+  Option B — Service Principal (CI/CD):
+    az ad sp create-for-rbac --name burn-reader \
+      --role "Cost Management Reader" \
+      --scopes /subscriptions/YOUR-SUBSCRIPTION-ID
+
+    export AZURE_TENANT_ID=...
+    export AZURE_CLIENT_ID=...
+    export AZURE_CLIENT_SECRET=...
+
+  Option C — Managed Identity (AKS):
+    No extra config needed if the pod has Cost Management Reader role.
+
+Step 3: Run reconciliation
+  burn reconcile --provider azure \
+    --azure-subscription YOUR-SUBSCRIPTION-ID \
+    --days 7
+
+  Or with environment variable:
+    export AZURE_SUBSCRIPTION_ID=YOUR-SUBSCRIPTION-ID
+    burn reconcile --provider azure --days 7
+
+Options:
+  --cost-type amortized   Spread RI/SP costs across term (default)
+  --cost-type actual      Show actual charges as invoiced
+  --ai                    Get AI analysis of results
+
+Required permissions:
+  Microsoft.CostManagement/query/action
+
+Data availability:
+  EA/MCA: 8-24 hours after usage
+  PAYG: up to 72 hours after usage`)
 }

@@ -1,5 +1,7 @@
 package collector
 
+import "time"
+
 type CloudProvider string
 
 const (
@@ -20,12 +22,12 @@ type NodeInfo struct {
 	MemoryBytes    int64
 	CPUAllocatable int64
 	MemAllocatable int64
-	CPUUsage              float64
-	MemoryUsage           int64
-	NetworkEgressBytesPerSec float64
-	GPUCount              int64
+	CPUUsage    float64
+	MemoryUsage int64
+	GPUCount    int64
 	GPUType               string // e.g. "Tesla-T4", "A100"
 	IsSpot                bool
+	CreatedAt             time.Time
 	ProviderID            string
 	Labels         map[string]string
 	Pods           []PodInfo
@@ -51,11 +53,13 @@ type PVCInfo struct {
 	StorageClass   string
 	RequestedBytes int64
 	VolumeName     string
+	CloudDiskID    string // vol-xxx (AWS) or Azure disk resource path
 }
 
 type LBServiceInfo struct {
 	Name      string
 	Namespace string
+	Hostname  string // ELB hostname or Azure LB IP
 }
 
 type WorkloadInfo struct {

@@ -1,6 +1,9 @@
 package collector
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestWrapQuery(t *testing.T) {
 	tests := []struct {
@@ -79,5 +82,39 @@ func TestWrapQuantileQuery(t *testing.T) {
 				t.Errorf("wrapQuantileQuery() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPeriodToDays(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"7d", 7},
+		{"30d", 30},
+		{"1d", 1},
+		{"365d", 365},
+		{"24h", 1},
+		{"1h", 1.0 / 24},
+		{"12h", 0.5},
+		{"1w", 7},
+		{"4w", 28},
+		{"1y", 365},
+		{"5m", 5.0 / 1440},
+		{"60s", 60.0 / 86400},
+		{"", -1},
+		{"abc", -1},
+		{"d", -1},
+	}
+
+	for _, tt := range tests {
+		got := PeriodToDays(tt.input)
+		if tt.want < 0 {
+			if got >= 0 {
+				t.Errorf("PeriodToDays(%q) = %f, want <0", tt.input, got)
+			}
+		} else if math.Abs(got-tt.want) > 0.001 {
+			t.Errorf("PeriodToDays(%q) = %f, want %f", tt.input, got, tt.want)
+		}
 	}
 }

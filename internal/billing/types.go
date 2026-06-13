@@ -14,7 +14,7 @@ type AthenaConfig struct {
 const HoursPerMonth = 730.0
 const DaysPerMonth = HoursPerMonth / 24.0
 
-// Resource categories matching OpenCost convention
+// Resource categories for billing classification
 const (
 	CategoryCompute    = "Compute"
 	CategoryDisk       = "Disk"

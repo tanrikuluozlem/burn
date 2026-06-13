@@ -599,7 +599,7 @@ func TestStorageCostInNamespace(t *testing.T) {
 		t.Errorf("database storage = %.0f, expected 10", namespaces[0].StorageCost)
 	}
 	if namespaces[0].MonthlyCost != 60 {
-		t.Errorf("database total = %.0f, expected 60 (50+10)", namespaces[0].MonthlyCost)
+		t.Errorf("database total = %.0f, expected 60 (compute 50 + storage 10)", namespaces[0].MonthlyCost)
 	}
 	if namespaces[1].StorageCost != 2 {
 		t.Errorf("cache storage = %.0f, expected 2", namespaces[1].StorageCost)

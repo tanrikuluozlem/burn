@@ -71,9 +71,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 
 	if len(report.Namespaces) > 0 {
 		nsLines := make([]string, 0, len(report.Namespaces))
-		var allocated float64
 		for _, ns := range report.Namespaces {
-			allocated += ns.MonthlyCost
 			if hasPrometheus {
 				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 					ns.Name, ns.PodCount, ns.MonthlyCost,
@@ -84,9 +82,8 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 					ns.Name, ns.PodCount, ns.MonthlyCost))
 			}
 		}
-		idle := report.MonthlyCost - allocated
-		if idle > 0 {
-			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.2f/mo", idle))
+		if report.TotalIdleCost > 0 {
+			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.2f/mo", report.TotalIdleCost))
 		}
 		nsLines = append(nsLines, fmt.Sprintf("*Total: $%.2f/mo*", report.MonthlyCost))
 		blocks = append(blocks, Block{

@@ -252,8 +252,8 @@ func parseToolResponse(resp *anthropic.Message) ([]Recommendation, string, error
 }
 
 // Ask answers natural language questions about the cluster costs
-func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question string) (string, error) {
-	prompt := a.buildAskPrompt(report, question)
+func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question string, extraContext ...string) (string, error) {
+	prompt := a.buildAskPrompt(report, question, extraContext...)
 
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
@@ -277,8 +277,8 @@ func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question
 }
 
 // AskStream streams the AI response token by token.
-func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, question string, onText func(string)) (string, error) {
-	prompt := a.buildAskPrompt(report, question)
+func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, question string, onText func(string), extraContext ...string) (string, error) {
+	prompt := a.buildAskPrompt(report, question, extraContext...)
 
 	stream := a.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
@@ -305,15 +305,19 @@ func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, qu
 	return full, nil
 }
 
-func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string) string {
+func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string, extraContext ...string) string {
 	reportJSON, _ := json.MarshalIndent(report, "", "  ")
+	billing := ""
+	if len(extraContext) > 0 && extraContext[0] != "" {
+		billing = fmt.Sprintf("\n\nReconciliation data (actual billing from cloud provider — this is the source of truth for SP/RI/Spot pricing):\n%s", extraContext[0])
+	}
 	return fmt.Sprintf(`Here is the current Kubernetes cluster cost report:
 
-%s
+%s%s
 
 User question: %s
 
-Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, question)
+Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, billing, question)
 }
 
 const askSystemPrompt = `You are a Kubernetes FinOps expert assistant. You help users understand their cluster costs and find optimization opportunities.

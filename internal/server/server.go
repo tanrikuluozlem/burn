@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,13 +32,14 @@ type Config struct {
 }
 
 type Server struct {
-	config      Config
-	httpServer  *http.Server
-	collector   *collector.Collector
-	advisor     *advisor.Advisor
-	wg          sync.WaitGroup
-	activeReqs  int
-	reqMu       sync.Mutex
+	config        Config
+	httpServer    *http.Server
+	collector     *collector.Collector
+	pricing       *pricing.CloudPricingProvider
+	advisor       *advisor.Advisor
+	wg            sync.WaitGroup
+	activeReqs    int
+	reqMu         sync.Mutex
 	maxActiveReqs int
 }
 
@@ -47,9 +49,17 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to create collector: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pp, err := pricing.NewCloudPricingProvider(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to init pricing: %w", err)
+	}
+
 	s := &Server{
 		config:        cfg,
 		collector:     coll,
+		pricing:       pp,
 		advisor:       advisor.New(cfg.APIKey),
 		maxActiveReqs: 5,
 	}
@@ -198,7 +208,7 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 	case text == "" || text == "analyze":
 		response, err = s.handleAnalyze(ctx)
 	default:
-		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn — cost summary\n  /burn ns <name> — pod details\n  /burn ask \"question\" — AI analysis\n  /burn reconcile — AWS CUR reconciliation\n  /burn reconcile --provider azure --azure-subscription <id>\n  /burn reconcile --days 7", text)
+		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn — cost summary\n  /burn ns <name> — pod details\n  /burn ask \"question\" — AI analysis\n  /burn reconcile — AWS CUR reconciliation\n  /burn reconcile --provider azure --azure-subscription <id>\n  /burn reconcile --days 7 --data-delay 24 --cost-type amortized", text)
 	}
 
 	if err != nil {
@@ -215,7 +225,16 @@ func (s *Server) handleAsk(ctx context.Context, question string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	answer, err := s.advisor.Ask(ctx, report, question)
+
+	// Include reconciliation billing data if cloud provider is configured
+	var billingContext string
+	if sub := os.Getenv("AZURE_SUBSCRIPTION_ID"); sub != "" {
+		if summary := s.getReconciliationContext(ctx, report); summary != "" {
+			billingContext = summary
+		}
+	}
+
+	answer, err := s.advisor.Ask(ctx, report, question, billingContext)
 	if err != nil {
 		return "", err
 	}
@@ -247,9 +266,7 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 	hasPrometheus := report.MetricsSource == "prometheus"
 	if len(report.Namespaces) > 0 {
 		summary += "\n\n*Cost by Namespace:*"
-		var allocated float64
 		for _, ns := range report.Namespaces {
-			allocated += ns.MonthlyCost
 			if hasPrometheus {
 				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 					ns.Name, ns.PodCount, ns.MonthlyCost,
@@ -259,9 +276,8 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 				summary += fmt.Sprintf("\n• `%s` — %d pods — $%.2f/mo", ns.Name, ns.PodCount, ns.MonthlyCost)
 			}
 		}
-		idle := report.MonthlyCost - allocated
-		if idle > 0 {
-			summary += fmt.Sprintf("\n• _Idle (unallocated)_ — $%.2f/mo", idle)
+		if report.TotalIdleCost > 0 {
+			summary += fmt.Sprintf("\n• _Idle (unallocated)_ — $%.2f/mo", report.TotalIdleCost)
 		}
 		summary += fmt.Sprintf("\n*Total: $%.2f/mo*", report.MonthlyCost)
 	}
@@ -309,6 +325,8 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 	provider := "aws"
 	azureSubscription := ""
 	days := 7
+	dataDelayHours := 48
+	costType := "amortized"
 
 	args := strings.Fields(text)
 	for i, arg := range args {
@@ -323,6 +341,14 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 				days = 7
 			}
 		}
+		if arg == "--data-delay" && i+1 < len(args) {
+			if d, err := fmt.Sscanf(args[i+1], "%d", &dataDelayHours); err != nil || d != 1 || dataDelayHours < 0 {
+				dataDelayHours = 48
+			}
+		}
+		if arg == "--cost-type" && i+1 < len(args) {
+			costType = args[i+1]
+		}
 	}
 
 	report, err := s.getReport(ctx)
@@ -335,10 +361,7 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 		return "", err
 	}
 
-	dataDelay := 48 * time.Hour
-	if provider == "azure" {
-		dataDelay = 24 * time.Hour
-	}
+	dataDelay := time.Duration(dataDelayHours) * time.Hour
 	end := time.Now().UTC().Add(-dataDelay)
 	start := end.AddDate(0, 0, -days)
 
@@ -349,7 +372,7 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 		if azureSubscription == "" {
 			azureSubscription = os.Getenv("AZURE_SUBSCRIPTION_ID")
 		}
-		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription}
+		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription, CostType: costType}
 		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
 		if err != nil {
 			return fmt.Sprintf("Azure connection failed: %v", err), nil
@@ -358,7 +381,15 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 		for _, n := range report.Nodes {
 			estimatedCosts[n.Name] = n.MonthlyPrice
 		}
-		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, start, end, float64(days))
+		pvEstimates := make(map[string]float64)
+		for _, pv := range report.PVCosts {
+			pvEstimates[pv.Namespace+"/"+pv.Name] = pv.MonthlyCost
+		}
+		lbEstimates := make(map[string]float64)
+		for _, lb := range report.LBCosts {
+			lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
+		}
+		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, float64(days))
 		if err != nil {
 			return fmt.Sprintf("Azure cost query failed: %v", err), nil
 		}
@@ -390,6 +421,16 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 		}
 	}
 
+	// Enrich coverage gaps with real RI pricing from cloud APIs
+	for i := range result.CoverageGaps {
+		gap := &result.CoverageGaps[i]
+		saving, pct, ok := s.pricing.GetRISaving(ctx, gap.InstanceType, gap.Region)
+		if ok {
+			gap.PotentialSaving = saving
+			gap.Recommendation = fmt.Sprintf("$%.0f/mo (%.0f%% off) with 1yr Reserved Instance", saving, pct)
+		}
+	}
+
 	summary := fmt.Sprintf("*Reconciliation (%s - %s)*\n%s\n",
 		result.PeriodStart.Format("Jan 2"), result.PeriodEnd.Format("Jan 2, 2006"),
 		result.DataDelay)
@@ -404,11 +445,97 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 			n.NodeName, n.PricingTerm, n.EstimatedMonthlyCost, n.ActualCost, diff)
 	}
 
-	summary += fmt.Sprintf("\n\n*Summary:*\nEstimated: $%.2f/mo\nActual: $%.2f/mo\nDifference: $%+.2f (%+.1f%%)",
-		result.TotalEstimatedCost, result.TotalActualCost,
-		result.TotalDifference, result.TotalDiffPercent)
+	if len(result.Disks) > 0 || len(result.OrphanedDisks) > 0 {
+		summary += "\n\n*Storage:*"
+		for _, d := range result.Disks {
+			label := d.PVCNamespace + "/" + d.PVCName
+			if d.MatchMethod == "os-disk" {
+				label = "OS disk"
+			}
+			summary += fmt.Sprintf("\n• `%s` %s — $%.2f/mo", d.DiskName, label, d.ActualCost)
+		}
+		for _, d := range result.OrphanedDisks {
+			summary += fmt.Sprintf("\n• `%s` _(orphaned)_ — $%.2f/mo", d.DiskName, d.ActualCost)
+		}
+	}
+
+	if len(result.CoverageGaps) > 0 {
+		var totalSaving float64
+		for _, g := range result.CoverageGaps {
+			totalSaving += g.PotentialSaving
+		}
+		summary += fmt.Sprintf("\n\n*Coverage Gaps:* %d on-demand nodes could save $%.0f/mo with RI",
+			len(result.CoverageGaps), totalSaving)
+	}
+
+	if result.InfraCost != nil {
+		summary += fmt.Sprintf("\n\n*Infrastructure Total:*\nCompute: $%.2f | Storage: $%.2f | LB: $%.2f | IP: $%.2f\n*Total: $%.2f/mo* (est $%.2f)",
+			result.InfraCost.ComputeActual, result.InfraCost.DiskActual,
+			result.InfraCost.LBActual, result.InfraCost.PublicIPActual,
+			result.InfraCost.TotalActual, result.InfraCost.TotalEstimated)
+	} else {
+		summary += fmt.Sprintf("\n\n*Summary:*\nEstimated: $%.2f/mo\nActual: $%.2f/mo\nDifference: $%+.2f (%+.1f%%)",
+			result.TotalEstimatedCost, result.TotalActualCost,
+			result.TotalDifference, result.TotalDiffPercent)
+	}
 
 	return summary, nil
+}
+
+func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.CostReport) string {
+	sub := os.Getenv("AZURE_SUBSCRIPTION_ID")
+	if sub == "" {
+		return ""
+	}
+
+	info, err := s.collector.Collect(ctx)
+	if err != nil {
+		return ""
+	}
+
+	azureCfg := billing.AzureConfig{SubscriptionID: sub, CostType: "amortized"}
+	azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
+	if err != nil {
+		return ""
+	}
+
+	dataDelay := 24 * time.Hour
+	end := time.Now().UTC().Add(-dataDelay)
+	start := end.AddDate(0, 0, -2)
+
+	estimatedCosts := make(map[string]float64)
+	for _, n := range report.Nodes {
+		estimatedCosts[n.Name] = n.MonthlyPrice
+	}
+	pvEstimates := make(map[string]float64)
+	for _, pv := range report.PVCosts {
+		pvEstimates[pv.Namespace+"/"+pv.Name] = pv.MonthlyCost
+	}
+	lbEstimates := make(map[string]float64)
+	for _, lb := range report.LBCosts {
+		lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
+	}
+
+	result, err := billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, 2)
+	if err != nil {
+		return ""
+	}
+
+	// Enrich coverage gaps with real RI pricing
+	for i := range result.CoverageGaps {
+		gap := &result.CoverageGaps[i]
+		saving, pct, ok := s.pricing.GetRISaving(ctx, gap.InstanceType, gap.Region)
+		if ok {
+			gap.PotentialSaving = saving
+			gap.Recommendation = fmt.Sprintf("$%.0f/mo (%.0f%% off) with 1yr Reserved Instance", saving, pct)
+		}
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error) {
@@ -428,10 +555,16 @@ func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error)
 		return fmt.Sprintf("No pods found in namespace `%s`", ns), nil
 	}
 
-	var totalCost float64
+	var computeCost, storageCost float64
 	for _, p := range pods {
-		totalCost += p.MonthlyCost
+		computeCost += p.MonthlyCost
 	}
+	for _, pv := range report.PVCosts {
+		if pv.Namespace == ns {
+			storageCost += pv.MonthlyCost
+		}
+	}
+	totalCost := computeCost + storageCost
 
 	hasPrometheus := report.MetricsSource == "prometheus"
 	result := fmt.Sprintf("*Namespace: %s* (%d pods, $%.2f/mo)\n", ns, len(pods), totalCost)
@@ -447,6 +580,12 @@ func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error)
 		}
 	}
 
+	for _, pv := range report.PVCosts {
+		if pv.Namespace == ns {
+			result += fmt.Sprintf("\n• `%s` (%s %.0fGi) — $%.2f/mo", pv.Name, pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost)
+		}
+	}
+
 	return result, nil
 }
 
@@ -456,16 +595,11 @@ func (s *Server) getReport(ctx context.Context) (*analyzer.CostReport, error) {
 		return nil, fmt.Errorf("failed to collect cluster data: %w", err)
 	}
 
-	pp, err := pricing.NewCloudPricingProvider(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pricing: %w", err)
-	}
-
-	report, err := analyzer.New(pp).Analyze(ctx, info)
+	report, err := analyzer.New(s.pricing).Analyze(ctx, info)
 	if err != nil {
 		return nil, err
 	}
-	report.Period = s.config.Period
+	report.Period = s.collector.Period()
 
 	return report, nil
 }
@@ -475,17 +609,35 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 		return
 	}
 
+	// Slack section block text limit is 3000 chars.
+	// Split long messages into multiple blocks.
+	const maxBlockText = 2900
+	var blocks []map[string]any
+	for len(text) > 0 {
+		chunk := text
+		if len(chunk) > maxBlockText {
+			// Split at last newline before limit
+			cut := strings.LastIndex(chunk[:maxBlockText], "\n")
+			if cut <= 0 {
+				cut = maxBlockText
+			}
+			chunk = text[:cut]
+			text = text[cut:]
+		} else {
+			text = ""
+		}
+		blocks = append(blocks, map[string]any{
+			"type": "section",
+			"text": map[string]string{
+				"type": "mrkdwn",
+				"text": chunk,
+			},
+		})
+	}
+
 	payload := map[string]any{
 		"response_type": "in_channel",
-		"blocks": []map[string]any{
-			{
-				"type": "section",
-				"text": map[string]string{
-					"type": "mrkdwn",
-					"text": text,
-				},
-			},
-		},
+		"blocks":        blocks,
 	}
 
 	body, err := json.Marshal(payload)
@@ -505,6 +657,10 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 		fmt.Printf("failed to send slack response: %v\n", err)
 		return
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		fmt.Printf("slack response_url returned %d: %s\n", resp.StatusCode, string(respBody))
+	}
 }
 

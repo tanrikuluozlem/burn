@@ -217,6 +217,86 @@ func parseOnDemandPrice(priceJSON string) (float64, error) {
 	return 0, fmt.Errorf("no USD price in response")
 }
 
+func (p *AWSProvider) GetRIHourlyPrice(ctx context.Context, instanceType, region string) (float64, error) {
+	key := fmt.Sprintf("ri1yr:%s:%s", instanceType, region)
+
+	p.mu.RLock()
+	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
+		p.mu.RUnlock()
+		return c.price, nil
+	}
+	p.mu.RUnlock()
+
+	regionCode := awsRegionToCode(region)
+
+	input := &pricing.GetProductsInput{
+		ServiceCode: aws.String("AmazonEC2"),
+		Filters: []types.Filter{
+			{Type: types.FilterTypeTermMatch, Field: aws.String("instanceType"), Value: aws.String(instanceType)},
+			{Type: types.FilterTypeTermMatch, Field: aws.String("location"), Value: aws.String(regionCode)},
+			{Type: types.FilterTypeTermMatch, Field: aws.String("operatingSystem"), Value: aws.String("Linux")},
+			{Type: types.FilterTypeTermMatch, Field: aws.String("tenancy"), Value: aws.String("Shared")},
+			{Type: types.FilterTypeTermMatch, Field: aws.String("preInstalledSw"), Value: aws.String("NA")},
+			{Type: types.FilterTypeTermMatch, Field: aws.String("capacitystatus"), Value: aws.String("Used")},
+		},
+		MaxResults: aws.Int32(1),
+	}
+
+	result, err := p.pricingClient.GetProducts(ctx, input)
+	if err != nil {
+		return 0, err
+	}
+	if len(result.PriceList) == 0 {
+		return 0, fmt.Errorf("no pricing for %s in %s", instanceType, region)
+	}
+
+	hourly, err := parseRI1yrNoUpfront(result.PriceList[0])
+	if err != nil {
+		return 0, err
+	}
+
+	p.mu.Lock()
+	p.cache[key] = cachedPrice{price: hourly, expiresAt: time.Now().Add(time.Hour)}
+	p.mu.Unlock()
+
+	return hourly, nil
+}
+
+func parseRI1yrNoUpfront(priceJSON string) (float64, error) {
+	var data struct {
+		Terms struct {
+			Reserved map[string]struct {
+				TermAttributes struct {
+					LeaseContractLength string `json:"LeaseContractLength"`
+					OfferingClass       string `json:"OfferingClass"`
+					PurchaseOption      string `json:"PurchaseOption"`
+				} `json:"termAttributes"`
+				PriceDimensions map[string]struct {
+					Unit         string `json:"unit"`
+					PricePerUnit struct {
+						USD string `json:"USD"`
+					} `json:"pricePerUnit"`
+				} `json:"priceDimensions"`
+			} `json:"Reserved"`
+		} `json:"terms"`
+	}
+	if err := json.Unmarshal([]byte(priceJSON), &data); err != nil {
+		return 0, err
+	}
+
+	for _, offer := range data.Terms.Reserved {
+		ta := offer.TermAttributes
+		if ta.LeaseContractLength == "1yr" && ta.OfferingClass == "standard" && ta.PurchaseOption == "No Upfront" {
+			for _, pd := range offer.PriceDimensions {
+				if pd.Unit == "Hrs" && pd.PricePerUnit.USD != "" {
+					return strconv.ParseFloat(pd.PricePerUnit.USD, 64)
+				}
+			}
+		}
+	}
+	return 0, fmt.Errorf("no 1yr standard no-upfront RI found")
+}
+
 func (p *AWSProvider) GetEBSPrice(ctx context.Context, volumeType, region string) (float64, error) {
 	key := fmt.Sprintf("ebs:%s:%s", volumeType, region)
 

@@ -84,9 +84,9 @@ var storagePrices = map[string]float64{
 	"gp2": 0.10, "gp3": 0.08, "io1": 0.125, "io2": 0.125, "st1": 0.045, "sc1": 0.015,
 	// GCP Persistent Disk
 	"pd-standard": 0.04, "pd-ssd": 0.17, "pd-balanced": 0.10,
-	// Azure Managed Disk
-	"Premium_LRS": 0.135, "StandardSSD_LRS": 0.075, "Standard_LRS": 0.04,
-	"managed-premium": 0.135, "managed": 0.04,
+	// Azure Managed Disk (per-GiB, derived from P10/E10/S10 tier ÷ 128 GiB)
+	"Premium_LRS": 0.15, "StandardSSD_LRS": 0.075, "Standard_LRS": 0.04,
+	"managed-premium": 0.15, "managed-csi-premium": 0.15, "managed-csi": 0.075, "managed": 0.04,
 	// Default fallback
 	"default": 0.04,
 }

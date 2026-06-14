@@ -242,41 +242,6 @@ func FormatAIReport(report *advisor.Report) *Message {
 	return &Message{Blocks: blocks}
 }
 
-func FormatQuickCost(report *analyzer.CostReport) *Message {
-	metricsNote := "(based on requests)"
-	if report.MetricsSource == "prometheus" {
-		metricsNote = "(based on actual usage)"
-	}
-
-	idlePercent := 0.0
-	if report.MonthlyCost > 0 {
-		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
-	}
-
-	text := fmt.Sprintf("*Cluster Cost Summary* %s\n"+
-		"Nodes: %d | Pods: %d\n"+
-		"Monthly: $%.2f | Idle: $%.2f (%.0f%%)",
-		metricsNote,
-		report.TotalNodes, report.TotalPods,
-		report.MonthlyCost, report.TotalIdleCost, idlePercent)
-
-	if report.WasteAnalysis.PotentialSavings > 0 {
-		text += fmt.Sprintf("\n_Potential savings: $%.2f/mo_", report.WasteAnalysis.PotentialSavings)
-	}
-
-	return &Message{
-		Blocks: []Block{
-			{
-				Type: "section",
-				Text: &TextObject{
-					Type: "mrkdwn",
-					Text: text,
-				},
-			},
-		},
-	}
-}
-
 func severityEmoji(severity advisor.Severity) string {
 	switch strings.ToLower(string(severity)) {
 	case "critical":

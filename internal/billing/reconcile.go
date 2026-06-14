@@ -143,7 +143,7 @@ func (r *Reconciler) Reconcile(
 
 	var splitCosts map[string]float64
 	if colSet.HasSplitLineItem {
-		sc, err := r.athena.QuerySplitCostAllocation(ctx, start, end)
+		sc, err := r.athena.QuerySplitCostAllocation(ctx, start, end, colSet)
 		if err != nil {
 			slog.Warn("split cost allocation query failed, using proportional", "err", err)
 		} else {

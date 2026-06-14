@@ -66,6 +66,8 @@ func (a *AthenaClient) DetectColumns(ctx context.Context) (CURColumnSet, error) 
 			colSet.HasEffectiveCost = true
 		case strings.HasPrefix(col, "split_line_item"):
 			colSet.HasSplitLineItem = true
+		case col == "resource_tags":
+			colSet.HasResourceTags = true
 		}
 	}
 
@@ -198,20 +200,27 @@ WHERE line_item_product_code = 'AmazonEC2'
 	)
 }
 
-func (a *AthenaClient) QuerySplitCostAllocation(ctx context.Context, start, end time.Time) (map[string]float64, error) {
+func (a *AthenaClient) QuerySplitCostAllocation(ctx context.Context, start, end time.Time, colSet CURColumnSet) (map[string]float64, error) {
+	tagExpr := "resource_tags['aws:eks:namespace']"
+	if !colSet.HasResourceTags {
+		tagExpr = "tags['aws:eks:namespace']"
+	}
 	sql := fmt.Sprintf(
-		`SELECT tags['aws:eks:namespace'] AS ns,
+		`SELECT %s AS ns,
 		        SUM(split_line_item_split_cost) AS cost
 		 FROM %s.%s
 		 WHERE split_line_item_split_cost IS NOT NULL
-		   AND tags['aws:eks:namespace'] IS NOT NULL
-		   AND tags['aws:eks:namespace'] != ''
+		   AND %s IS NOT NULL
+		   AND %s != ''
 		   AND line_item_usage_start_date >= TIMESTAMP '%s'
 		   AND line_item_usage_start_date < TIMESTAMP '%s'
-		 GROUP BY tags['aws:eks:namespace']`,
+		 GROUP BY %s`,
+		tagExpr,
 		a.config.Database, a.config.Table,
+		tagExpr, tagExpr,
 		start.Format("2006-01-02 15:04:05"),
 		end.Format("2006-01-02 15:04:05"),
+		tagExpr,
 	)
 
 	rows, _, err := a.executeQuery(ctx, sql)

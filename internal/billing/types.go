@@ -41,6 +41,7 @@ type CURColumnSet struct {
 	HasSavingsPlanARN bool
 	HasEffectiveCost  bool
 	HasSplitLineItem  bool
+	HasResourceTags   bool // CUR 2.0 MAP column
 }
 
 type AggregatedCost struct {

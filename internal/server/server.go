@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -212,7 +213,7 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 	}
 
 	if err != nil {
-		fmt.Printf("slack command error: %v\n", err)
+		slog.Error("slack command failed", "err", err)
 		response = fmt.Sprintf("Error: %v", err)
 	}
 
@@ -226,12 +227,9 @@ func (s *Server) handleAsk(ctx context.Context, question string) (string, error)
 		return "", err
 	}
 
-	// Include reconciliation billing data if cloud provider is configured
 	var billingContext string
-	if sub := os.Getenv("AZURE_SUBSCRIPTION_ID"); sub != "" {
-		if summary := s.getReconciliationContext(ctx, report); summary != "" {
-			billingContext = summary
-		}
+	if summary := s.getReconciliationContext(ctx, report); summary != "" {
+		billingContext = summary
 	}
 
 	answer, err := s.advisor.Ask(ctx, report, question, billingContext)
@@ -483,25 +481,10 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 }
 
 func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.CostReport) string {
-	sub := os.Getenv("AZURE_SUBSCRIPTION_ID")
-	if sub == "" {
-		return ""
-	}
-
 	info, err := s.collector.Collect(ctx)
 	if err != nil {
 		return ""
 	}
-
-	azureCfg := billing.AzureConfig{SubscriptionID: sub, CostType: "amortized"}
-	azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
-	if err != nil {
-		return ""
-	}
-
-	dataDelay := 24 * time.Hour
-	end := time.Now().UTC().Add(-dataDelay)
-	start := end.AddDate(0, 0, -2)
 
 	estimatedCosts := make(map[string]float64)
 	for _, n := range report.Nodes {
@@ -516,12 +499,62 @@ func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.
 		lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
 	}
 
-	result, err := billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, 2)
-	if err != nil {
+	dataDelay := 24 * time.Hour
+	end := time.Now().UTC().Add(-dataDelay)
+	start := end.AddDate(0, 0, -2)
+
+	// Detect cloud from node labels, not env vars
+	cloud := collector.CloudUnknown
+	for _, n := range info.Nodes {
+		if n.CloudProvider != collector.CloudUnknown {
+			cloud = n.CloudProvider
+			break
+		}
+	}
+
+	var result *billing.ReconciliationReport
+
+	if cloud == collector.CloudAzure {
+		sub := os.Getenv("AZURE_SUBSCRIPTION_ID")
+		if sub == "" {
+			return ""
+		}
+		azureCfg := billing.AzureConfig{SubscriptionID: sub, CostType: "amortized"}
+		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
+		if err != nil {
+			return ""
+		}
+		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, 2)
+		if err != nil {
+			return ""
+		}
+	} else if curDB := os.Getenv("CUR_DATABASE"); curDB != "" {
+		cfg := billing.AthenaConfig{
+			Database:       curDB,
+			Table:          os.Getenv("CUR_TABLE"),
+			OutputLocation: os.Getenv("CUR_OUTPUT_LOCATION"),
+			WorkGroup:      os.Getenv("CUR_WORKGROUP"),
+			Region:         os.Getenv("CUR_REGION"),
+		}
+		if cfg.WorkGroup == "" {
+			cfg.WorkGroup = "primary"
+		}
+		if err := billing.ValidateAthenaConfig(cfg); err != nil {
+			return ""
+		}
+		athenaClient, err := billing.NewAthenaClient(ctx, cfg)
+		if err != nil {
+			return ""
+		}
+		reconciler := billing.NewReconciler(athenaClient)
+		result, err = reconciler.Reconcile(ctx, report, info, start, end)
+		if err != nil {
+			return ""
+		}
+	} else {
 		return ""
 	}
 
-	// Enrich coverage gaps with real RI pricing
 	for i := range result.CoverageGaps {
 		gap := &result.CoverageGaps[i]
 		saving, pct, ok := s.pricing.GetRISaving(ctx, gap.InstanceType, gap.Region)
@@ -642,7 +675,7 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		fmt.Printf("failed to marshal slack response: %v\n", err)
+		slog.Error("failed to marshal slack response", "err", err)
 		return
 	}
 
@@ -654,13 +687,13 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 	}
 	resp, err := client.Post(responseURL, "application/json", strings.NewReader(string(body)))
 	if err != nil {
-		fmt.Printf("failed to send slack response: %v\n", err)
+		slog.Error("failed to send slack response", "err", err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		fmt.Printf("slack response_url returned %d: %s\n", resp.StatusCode, string(respBody))
+		slog.Warn("slack response_url error", "status", resp.StatusCode, "body", string(respBody))
 	}
 }
 

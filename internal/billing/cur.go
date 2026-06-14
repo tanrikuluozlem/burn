@@ -414,17 +414,21 @@ func MatchLBsToServices(
 	return matched, orphaned
 }
 
-// DetectCoverageGaps finds on-demand nodes that could benefit from RI/SP.
+const (
+	coverageGapMinCost      = 50
+	coverageGapFallbackDisc = 0.30
+)
+
 func DetectCoverageGaps(nodes []NodeReconciliation) []CoverageGap {
 	var gaps []CoverageGap
 	for _, n := range nodes {
 		if n.PricingTerm != "OnDemand" || n.SPCost > 0 || n.RICost > 0 || n.SpotCost > 0 {
 			continue
 		}
-		if n.ActualCost < 50 {
+		if n.ActualCost < coverageGapMinCost {
 			continue
 		}
-		saving := n.ActualCost * 0.30
+		saving := n.ActualCost * coverageGapFallbackDisc
 		gaps = append(gaps, CoverageGap{
 			NodeName:        n.NodeName,
 			InstanceType:    n.InstanceType,

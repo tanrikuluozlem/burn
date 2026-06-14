@@ -574,6 +574,318 @@ func TestDetectCoverageGapsSkipsPartialSP(t *testing.T) {
 	}
 }
 
+func TestZeroPeriodDaysNoNaN(t *testing.T) {
+	// OpenCost #1746: division by zero produces NaN in JSON output.
+	// Burn must return 0, never NaN or Inf.
+	nodes := []collector.NodeInfo{
+		{Name: "node-1", ProviderID: "aws:///us-east-1a/i-aaa"},
+	}
+	curCosts := map[string]*AggregatedCost{
+		"i-aaa": {ResourceID: "i-aaa", TotalCost: 10, ComputeCost: 10},
+	}
+	results, _, _ := MatchNodesToCUR(nodes, map[string]float64{"node-1": 70}, curCosts, 0, time.Time{})
+	for _, r := range results {
+		if math.IsInf(r.ActualCost, 0) || math.IsNaN(r.ActualCost) {
+			t.Error("zero periodDays must not produce Inf/NaN")
+		}
+		if math.IsInf(r.DifferencePercent, 0) || math.IsNaN(r.DifferencePercent) {
+			t.Error("zero periodDays must not produce Inf/NaN in DifferencePercent")
+		}
+	}
+}
+
+func TestZeroEstimatedNoDivByZero(t *testing.T) {
+	// Ensure DifferencePercent doesn't divide by zero when estimated is 0.
+	nodes := []collector.NodeInfo{
+		{Name: "node-1", ProviderID: "aws:///us-east-1a/i-aaa"},
+	}
+	curCosts := map[string]*AggregatedCost{
+		"i-aaa": {ResourceID: "i-aaa", TotalCost: 10, ComputeCost: 10},
+	}
+	results, _, _ := MatchNodesToCUR(nodes, map[string]float64{"node-1": 0}, curCosts, 7, time.Time{})
+	for _, r := range results {
+		if math.IsInf(r.DifferencePercent, 0) || math.IsNaN(r.DifferencePercent) {
+			t.Error("zero estimated must not produce Inf/NaN in DifferencePercent")
+		}
+	}
+}
+
+func TestNegativeCostNeverProduced(t *testing.T) {
+	// OpenCost #3574: negative costs for CronJob namespaces.
+	// Burn must never produce negative actual cost.
+	nodes := []collector.NodeInfo{
+		{Name: "node-1", ProviderID: "aws:///us-east-1a/i-aaa"},
+	}
+	curCosts := map[string]*AggregatedCost{
+		"i-aaa": {ResourceID: "i-aaa", TotalCost: 0, ComputeCost: 0},
+	}
+	results, _, _ := MatchNodesToCUR(nodes, map[string]float64{"node-1": 70}, curCosts, 7, time.Time{})
+	for _, r := range results {
+		if r.ActualCost < 0 {
+			t.Errorf("actual cost must not be negative, got %.2f", r.ActualCost)
+		}
+	}
+}
+
+func TestSpotAndOnDemandNeverSwapped(t *testing.T) {
+	// OpenCost #3259: Azure spot/on-demand prices swapped.
+	// Verify spot and on-demand items are correctly classified.
+	items := []CURLineItem{
+		{ResourceID: "spot-vm", EffectiveCost: 5, UsageType: "BoxUsage", PricingTerm: "Spot"},
+		{ResourceID: "od-vm", EffectiveCost: 20, UsageType: "BoxUsage", PricingTerm: "OnDemand"},
+	}
+	agg := AggregateCURByResource(items)
+
+	if agg["spot-vm"].PricingTerm != "Spot" {
+		t.Errorf("spot VM classified as %s", agg["spot-vm"].PricingTerm)
+	}
+	if agg["spot-vm"].SpotCost != 5 {
+		t.Errorf("spot cost = %f, want 5", agg["spot-vm"].SpotCost)
+	}
+	if agg["od-vm"].PricingTerm != "OnDemand" {
+		t.Errorf("on-demand VM classified as %s", agg["od-vm"].PricingTerm)
+	}
+	if agg["od-vm"].OnDemandCost != 20 {
+		t.Errorf("on-demand cost = %f, want 20", agg["od-vm"].OnDemandCost)
+	}
+}
+
+func TestSavingsCalculationZeroComputeTotal(t *testing.T) {
+	// Edge case: all cost fields zero but node exists.
+	// Must not divide by zero in savings proportional allocation.
+	n := NodeReconciliation{
+		EstimatedMonthlyCost: 100,
+		ActualCost:           0,
+		OnDemandCost:         0,
+		SPCost:               0,
+		RICost:               0,
+		SpotCost:             0,
+	}
+	saving := n.EstimatedMonthlyCost - n.ActualCost
+	computeTotal := n.OnDemandCost + n.SPCost + n.RICost + n.SpotCost
+	if computeTotal > 0 {
+		spSavings := saving * n.SPCost / computeTotal
+		if math.IsNaN(spSavings) || math.IsInf(spSavings, 0) {
+			t.Error("savings must not be NaN/Inf")
+		}
+	}
+	// computeTotal == 0 → skip division, no crash
+}
+
+func TestMixedRISPOnDemandSameNode(t *testing.T) {
+	// Real scenario: RI purchased mid-month, AWS CUR shows all 3 pricing terms.
+	items := []CURLineItem{
+		{ResourceID: "i-mixed", EffectiveCost: 80, UsageAmount: 200, UsageType: "BoxUsage:m5.xlarge"},
+		{ResourceID: "i-mixed", EffectiveCost: 30, UsageAmount: 100, UsageType: "BoxUsage:m5.xlarge", PricingTerm: "Reserved", ReservationARN: "arn:aws:ec2:ri/789"},
+		{ResourceID: "i-mixed", EffectiveCost: 20, UsageAmount: 80, UsageType: "BoxUsage:m5.xlarge", PricingTerm: "SavingsPlan", SavingsPlanARN: "arn:aws:sp/123"},
+	}
+	agg := AggregateCURByResource(items)
+	a := agg["i-mixed"]
+
+	if a.TotalCost != 130 {
+		t.Errorf("TotalCost = %f, want 130", a.TotalCost)
+	}
+	if a.OnDemandCost != 80 {
+		t.Errorf("OnDemandCost = %f, want 80", a.OnDemandCost)
+	}
+	if a.RICost != 30 {
+		t.Errorf("RICost = %f, want 30", a.RICost)
+	}
+	if a.SPCost != 20 {
+		t.Errorf("SPCost = %f, want 20", a.SPCost)
+	}
+	// Priority: Spot > RI > SP > OD. RI present → "Reserved"
+	if a.PricingTerm != "Reserved" {
+		t.Errorf("PricingTerm = %s, want Reserved (RI takes priority over SP)", a.PricingTerm)
+	}
+}
+
+func TestFullSPCoverageZeroOnDemand(t *testing.T) {
+	// Enterprise scenario: 100% SP coverage, no on-demand at all.
+	items := []CURLineItem{
+		{ResourceID: "i-allsp", EffectiveCost: 60, UsageAmount: 720, UsageType: "BoxUsage:m5.xlarge",
+			PricingTerm: "SavingsPlan", SavingsPlanARN: "arn:aws:sp/full"},
+	}
+	agg := AggregateCURByResource(items)
+	a := agg["i-allsp"]
+
+	if a.PricingTerm != "SavingsPlan" {
+		t.Errorf("PricingTerm = %s, want SavingsPlan", a.PricingTerm)
+	}
+	if a.OnDemandCost != 0 {
+		t.Errorf("OnDemandCost = %f, want 0", a.OnDemandCost)
+	}
+	if a.SPCost != 60 {
+		t.Errorf("SPCost = %f, want 60", a.SPCost)
+	}
+
+	// Coverage gap: 100% SP node must NOT appear as gap
+	nodes := []collector.NodeInfo{
+		{Name: "sp-only", ProviderID: "aws:///us-east-1a/i-allsp", InstanceType: "m5.xlarge"},
+	}
+	matched, _, _ := MatchNodesToCUR(nodes, map[string]float64{"sp-only": 140}, agg, 30, time.Time{})
+	gaps := DetectCoverageGaps(matched)
+	if len(gaps) != 0 {
+		t.Errorf("100%% SP node must not be a coverage gap, got %d gaps", len(gaps))
+	}
+}
+
+func TestDeletedNodeUnmatchedCUR(t *testing.T) {
+	// Node deleted mid-period. CUR has cost but node is gone from K8s.
+	nodes := []collector.NodeInfo{
+		{Name: "alive", ProviderID: "aws:///us-east-1a/i-alive"},
+	}
+	curCosts := map[string]*AggregatedCost{
+		"i-alive":   {ResourceID: "i-alive", TotalCost: 70, ComputeCost: 70, PricingTerm: "OnDemand", OnDemandCost: 70},
+		"i-deleted": {ResourceID: "i-deleted", TotalCost: 30, ComputeCost: 30, PricingTerm: "OnDemand", OnDemandCost: 30},
+	}
+	_, unmatchedCUR, unmatchedNodes := MatchNodesToCUR(nodes, map[string]float64{"alive": 140}, curCosts, 7, time.Time{})
+
+	if unmatchedCUR != 1 {
+		t.Errorf("deleted node should be 1 unmatched CUR, got %d", unmatchedCUR)
+	}
+	if unmatchedNodes != 0 {
+		t.Errorf("alive node should match, unmatchedNodes = %d", unmatchedNodes)
+	}
+}
+
+func TestSpotEvictionReplacementMismatch(t *testing.T) {
+	// Spot evicted (i-old), replaced by new instance (i-new). CUR has both.
+	nodes := []collector.NodeInfo{
+		{Name: "spot-node", ProviderID: "aws:///us-east-1a/i-new-spot", IsSpot: true},
+	}
+	curCosts := map[string]*AggregatedCost{
+		"i-old-spot": {ResourceID: "i-old-spot", TotalCost: 3, ComputeCost: 3, PricingTerm: "Spot", SpotCost: 3},
+		"i-new-spot": {ResourceID: "i-new-spot", TotalCost: 5, ComputeCost: 5, PricingTerm: "Spot", SpotCost: 5},
+	}
+	results, unmatchedCUR, _ := MatchNodesToCUR(nodes, map[string]float64{"spot-node": 42}, curCosts, 7, time.Time{})
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 matched (new spot), got %d", len(results))
+	}
+	if results[0].PricingTerm != "Spot" {
+		t.Errorf("matched node should be Spot, got %s", results[0].PricingTerm)
+	}
+	if unmatchedCUR != 1 {
+		t.Errorf("evicted spot should be 1 unmatched CUR, got %d", unmatchedCUR)
+	}
+}
+
+func TestDataTransferDominatesCompute(t *testing.T) {
+	// Node with $5 compute but $50 data transfer.
+	items := []CURLineItem{
+		{ResourceID: "i-transfer", EffectiveCost: 5, UsageAmount: 168, UsageType: "BoxUsage:t3.large"},
+		{ResourceID: "i-transfer", EffectiveCost: 50, UsageAmount: 500, UsageType: "USE1-DataTransfer-Out-Bytes"},
+	}
+	agg := AggregateCURByResource(items)
+	a := agg["i-transfer"]
+
+	if a.ComputeCost != 5 {
+		t.Errorf("ComputeCost = %f, want 5", a.ComputeCost)
+	}
+	if a.DataTransferCost != 50 {
+		t.Errorf("DataTransferCost = %f, want 50", a.DataTransferCost)
+	}
+	if a.TotalCost != 55 {
+		t.Errorf("TotalCost = %f, want 55", a.TotalCost)
+	}
+	if a.UsageHours != 168 {
+		t.Errorf("UsageHours = %f, want 168 (compute only)", a.UsageHours)
+	}
+
+	nodes := []collector.NodeInfo{
+		{Name: "transfer-heavy", ProviderID: "aws:///us-east-1a/i-transfer"},
+	}
+	results, _, _ := MatchNodesToCUR(nodes, map[string]float64{"transfer-heavy": 36}, agg, 7, time.Time{})
+	r := results[0]
+	if r.ActualTransferCost == 0 {
+		t.Error("transfer cost must be separated from compute")
+	}
+	if r.ActualComputeCost >= r.ActualCost {
+		t.Error("compute must be less than total (data transfer not included in compute)")
+	}
+}
+
+func TestNegativeEffectiveCostRefund(t *testing.T) {
+	// AWS CUR refund: negative effective cost line item.
+	items := []CURLineItem{
+		{ResourceID: "i-refund", EffectiveCost: 100, UsageAmount: 720, UsageType: "BoxUsage:m5.xlarge"},
+		{ResourceID: "i-refund", EffectiveCost: -30, UsageAmount: 0, UsageType: "BoxUsage:m5.xlarge"},
+	}
+	agg := AggregateCURByResource(items)
+	a := agg["i-refund"]
+
+	if a.TotalCost != 70 {
+		t.Errorf("TotalCost = %f, want 70 (100 - 30 refund)", a.TotalCost)
+	}
+
+	// Credit exceeds cost — total goes negative
+	items2 := []CURLineItem{
+		{ResourceID: "i-credit", EffectiveCost: 10, UsageAmount: 24, UsageType: "BoxUsage:t3.micro"},
+		{ResourceID: "i-credit", EffectiveCost: -15, UsageAmount: 0, UsageType: "BoxUsage:t3.micro"},
+	}
+	agg2 := AggregateCURByResource(items2)
+	if agg2["i-credit"].TotalCost != -5 {
+		t.Errorf("TotalCost = %f, want -5 (net credit)", agg2["i-credit"].TotalCost)
+	}
+}
+
+func TestAKSSharedLBMultipleServices(t *testing.T) {
+	// AKS "kubernetes" shared LB with 5 services.
+	services := []collector.LBServiceInfo{
+		{Name: "api-gateway", Namespace: "prod"},
+		{Name: "monitoring", Namespace: "system"},
+		{Name: "webhook", Namespace: "integrations"},
+		{Name: "internal-api", Namespace: "backend"},
+		{Name: "grpc-service", Namespace: "backend"},
+	}
+	lbEstimates := map[string]float64{
+		"prod/api-gateway": 10, "system/monitoring": 2, "integrations/webhook": 1,
+		"backend/internal-api": 5, "backend/grpc-service": 3,
+	}
+	billingLBs := map[string]*AggregatedCost{
+		"kubernetes": {ResourceID: "kubernetes", TotalCost: 5.25},
+	}
+
+	matched, orphaned := MatchLBsToServices(services, lbEstimates, billingLBs, 7)
+
+	if len(matched) != 5 {
+		t.Fatalf("expected 5 matched (one per service), got %d", len(matched))
+	}
+	if len(orphaned) != 0 {
+		t.Errorf("expected 0 orphaned, got %d", len(orphaned))
+	}
+	for _, lb := range matched {
+		if lb.MatchMethod != "aks-shared-lb" {
+			t.Errorf("service %s: method = %s, want aks-shared-lb", lb.ServiceName, lb.MatchMethod)
+		}
+		expectedCost := (5.25 / 7 * DaysPerMonth) / 5
+		if math.Abs(lb.ActualCost-expectedCost) > 0.01 {
+			t.Errorf("service %s: cost = %.2f, want %.2f", lb.ServiceName, lb.ActualCost, expectedCost)
+		}
+	}
+}
+
+func TestTinyCostFloatingPointPrecision(t *testing.T) {
+	// Very small cost values must not produce NaN, Inf, or round to zero incorrectly.
+	items := []CURLineItem{
+		{ResourceID: "i-tiny", EffectiveCost: 0.0000001, UsageAmount: 1, UsageType: "BoxUsage:t3.nano"},
+	}
+	agg := AggregateCURByResource(items)
+	nodes := []collector.NodeInfo{
+		{Name: "tiny", ProviderID: "aws:///us-east-1a/i-tiny"},
+	}
+	results, _, _ := MatchNodesToCUR(nodes, map[string]float64{"tiny": 0.001}, agg, 7, time.Time{})
+	r := results[0]
+
+	if math.IsNaN(r.ActualCost) || math.IsInf(r.ActualCost, 0) {
+		t.Error("tiny cost must not produce NaN/Inf")
+	}
+	if r.ActualCost == 0 {
+		t.Error("tiny cost must not round to zero")
+	}
+}
+
 func TestClassifyAzureResource(t *testing.T) {
 	tests := []struct {
 		resourceType  string

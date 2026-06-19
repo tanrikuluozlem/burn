@@ -282,7 +282,7 @@ func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, qu
 
 	stream := a.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
-		MaxTokens: 1024,
+		MaxTokens: 4096,
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -311,13 +311,32 @@ func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string, e
 	if len(extraContext) > 0 && extraContext[0] != "" {
 		billing = fmt.Sprintf("\n\nReconciliation data (actual billing from cloud provider — this is the source of truth for SP/RI/Spot pricing):\n%s", extraContext[0])
 	}
+
+	// Pre-calculated spot savings so AI doesn't derive its own
+	spotSummary := ""
+	if len(report.SpotReadiness) > 0 {
+		ready := 0
+		for _, s := range report.SpotReadiness {
+			if s.Status == "spot-ready" {
+				ready++
+			}
+		}
+		spotSummary = fmt.Sprintf("\n\nSPOT SAVINGS (pre-calculated, use these exact values):\n%d/%d workloads spot-ready, total savings: $%.2f/mo\n",
+			ready, len(report.SpotReadiness), report.SpotSavings)
+		for _, s := range report.SpotReadiness {
+			if s.Status == "spot-ready" {
+				spotSummary += fmt.Sprintf("• %s/%s — $%.2f/mo per pod\n", s.Namespace, s.Name, s.MonthlyCost)
+			}
+		}
+	}
+
 	return fmt.Sprintf(`Here is the current Kubernetes cluster cost report:
 
-%s%s
+%s%s%s
 
 User question: %s
 
-Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, billing, question)
+Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, billing, spotSummary, question)
 }
 
 const askSystemPrompt = `You are a Kubernetes FinOps expert assistant. You help users understand their cluster costs and find optimization opportunities.
@@ -331,6 +350,7 @@ Guidelines:
 - If you don't have enough data to answer, say so
 - Format numbers clearly ($X.XX for costs, X% for percentages)
 - CPU usage in the report is in cores. Convert to millicores for display: 0.005 cores = 5m, 0.0001 cores = <1m
-- Do NOT calculate your own values. Use the data as provided.
+- Do NOT calculate your own values. Use the data as provided. Never sum, multiply, or derive numbers — only quote exact values from the JSON data.
 - When listing items, COUNT them from the data. Do not guess the count — verify it matches the items you list.
+- When showing totals, use ONLY the pre-calculated fields (total_estimated, total_actual, unmatched_compute). Never add up individual line items yourself.
 - Only use real kubectl flags. Do NOT invent flags.`

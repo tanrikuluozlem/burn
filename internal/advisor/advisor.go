@@ -95,38 +95,23 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport, focu
 	}, nil
 }
 
-const systemPrompt = `You are a Kubernetes FinOps expert. Analyze cluster data and provide actionable recommendations.
+const systemPrompt = `You are a Kubernetes FinOps expert. Analyze cluster data and provide 1-3 actionable recommendations.
 
-CRITICAL: You MUST return 1-3 recommendations in the recommendations array. Never return empty array.
+Summary: 2 sentences max. Lead with the key finding and dollar impact.
 
-SUMMARY (2 sentences max):
-- Key finding: "X of Y nodes are >Z% idle, wasting $W/month"
-- Best action briefly
+Each recommendation needs: id, category ("cost"), severity ("high" if >$100 savings), title with real node names, description with risk warning, action as exact command, estimated_savings (only on primary recommendation).
 
-EACH RECOMMENDATION MUST HAVE:
-- id: unique (e.g., "spot-1")
-- category: "cost"
-- severity: "high" for >$100 savings, "medium" otherwise
-- title: Action with real node names (e.g., "Convert ip-10-5-10-188, ip-10-5-10-213 to Spot")
-- description: Why + risk warning for high severity
-- action: Exact command (e.g., "eksctl create nodegroup --cluster=CLUSTER --spot --nodes=5")
-- estimated_savings: PRE-CALCULATED value (only for primary recommendation)
+Risk warnings to include:
+- Spot: only for stateless workloads with >1 replica, can be interrupted (AWS 2 min, Azure 30 sec, GCP 30 sec)
+- Consolidation: test failover first, check PodDisruptionBudgets
 
-RISK WARNINGS (MUST add to description):
-- Spot: "⚠️ Only for stateless workloads (Deployments with >1 replica). Do NOT convert StatefulSets, databases, or single-replica services. Spot instances can be interrupted with 2 min notice."
-- Consolidation: "⚠️ Test failover first. Check PodDisruptionBudgets."
-
-RULES:
-1. Use PRE-CALCULATED SAVINGS from prompt exactly. The estimated_savings value MUST be the exact dollar amount from PRE-CALCULATED SAVINGS. Do NOT calculate your own savings — your math will be wrong.
-2. Use REAL node names from data
-3. Only ONE recommendation gets estimated_savings, and it MUST match the "Use $X for estimated_savings" line from the prompt
-4. Pick ONE strategy: spot OR consolidation (not both)
-5. Reference NAMESPACE data: compare costs, identify over-provisioned namespaces, flag dev/qa vs prod imbalances
-6. Do NOT calculate percentages or dollar values yourself. Only use numbers that appear in the data. If a value is not in the data, do not invent it.
-7. When p95 data is available, use it for rightsizing recommendations: recommend request = p95 × 1.5 (50% headroom above peak). Explain why: "p95 CPU over the analysis period is Xm, so we recommend Ym request (1.5x p95 headroom)". This is more trustworthy than arbitrary values.
-8. The title recommended value MUST match the value in the description. Do not put one value in the title and a different value in the body.
-9. Only use real kubectl flags. Do NOT invent flags like --if-exists, --dry-run=true (correct: --dry-run=client), or any flag you are not certain exists.
-10. Spot interruption notice: AWS = 2 min, Azure = 30 sec, GCP = 30 sec. Use the correct value for the detected cloud.`
+Constraints:
+- Use the pre-calculated savings value from the prompt exactly. Do not calculate your own savings.
+- Use real node names from data. Do not invent names or numbers.
+- Pick one strategy: spot or consolidation, not both.
+- Reference namespace data: compare costs, flag dev/qa vs prod imbalances.
+- When p95 data is available, recommend request = p95 × 1.5 (50% headroom).
+- Title and description values must match. Only use real kubectl flags (e.g., --dry-run=client not --dry-run=true).`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
 	Type: "object",
@@ -267,8 +252,8 @@ func parseToolResponse(resp *anthropic.Message) ([]Recommendation, string, error
 }
 
 // Ask answers natural language questions about the cluster costs
-func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question string) (string, error) {
-	prompt := a.buildAskPrompt(report, question)
+func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question string, extraContext ...string) (string, error) {
+	prompt := a.buildAskPrompt(report, question, extraContext...)
 
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
@@ -292,12 +277,12 @@ func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question
 }
 
 // AskStream streams the AI response token by token.
-func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, question string, onText func(string)) (string, error) {
-	prompt := a.buildAskPrompt(report, question)
+func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, question string, onText func(string), extraContext ...string) (string, error) {
+	prompt := a.buildAskPrompt(report, question, extraContext...)
 
 	stream := a.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
-		MaxTokens: 1024,
+		MaxTokens: 4096,
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -320,15 +305,38 @@ func (a *Advisor) AskStream(ctx context.Context, report *analyzer.CostReport, qu
 	return full, nil
 }
 
-func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string) string {
+func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string, extraContext ...string) string {
 	reportJSON, _ := json.MarshalIndent(report, "", "  ")
+	billing := ""
+	if len(extraContext) > 0 && extraContext[0] != "" {
+		billing = fmt.Sprintf("\n\nReconciliation data (actual billing from cloud provider — this is the source of truth for SP/RI/Spot pricing):\n%s", extraContext[0])
+	}
+
+	// Pre-calculated spot savings so AI doesn't derive its own
+	spotSummary := ""
+	if len(report.SpotReadiness) > 0 {
+		ready := 0
+		for _, s := range report.SpotReadiness {
+			if s.Status == "spot-ready" {
+				ready++
+			}
+		}
+		spotSummary = fmt.Sprintf("\n\nSPOT SAVINGS (pre-calculated, use these exact values):\n%d/%d workloads spot-ready, total savings: $%.2f/mo\n",
+			ready, len(report.SpotReadiness), report.SpotSavings)
+		for _, s := range report.SpotReadiness {
+			if s.Status == "spot-ready" {
+				spotSummary += fmt.Sprintf("• %s/%s — $%.2f/mo per pod\n", s.Namespace, s.Name, s.MonthlyCost)
+			}
+		}
+	}
+
 	return fmt.Sprintf(`Here is the current Kubernetes cluster cost report:
 
-%s
+%s%s%s
 
 User question: %s
 
-Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, question)
+Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, billing, spotSummary, question)
 }
 
 const askSystemPrompt = `You are a Kubernetes FinOps expert assistant. You help users understand their cluster costs and find optimization opportunities.
@@ -342,6 +350,7 @@ Guidelines:
 - If you don't have enough data to answer, say so
 - Format numbers clearly ($X.XX for costs, X% for percentages)
 - CPU usage in the report is in cores. Convert to millicores for display: 0.005 cores = 5m, 0.0001 cores = <1m
-- Do NOT calculate your own values. Use the data as provided.
+- Do NOT calculate your own values. Use the data as provided. Never sum, multiply, or derive numbers — only quote exact values from the JSON data.
 - When listing items, COUNT them from the data. Do not guess the count — verify it matches the items you list.
+- When showing totals, use ONLY the pre-calculated fields (total_estimated, total_actual, unmatched_compute). Never add up individual line items yourself.
 - Only use real kubectl flags. Do NOT invent flags.`

@@ -3,46 +3,67 @@ package pricing
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/tanrikuluozlem/burn/internal/collector"
 )
 
 type CloudPricingProvider struct {
 	aws           *AWSProvider
+	awsOnce       sync.Once
 	azure         *AzureProvider
 	fallback      *StaticProvider
 	customPricing *CustomPricing
+	cloudOnce     sync.Once
 	detectedCloud collector.CloudProvider
 }
 
 func NewCloudPricingProvider(ctx context.Context) (*CloudPricingProvider, error) {
-	aws, err := NewAWSProvider(ctx)
-	if err != nil {
-		slog.Debug("aws pricing unavailable, using fallback", "err", err)
-	}
 	return &CloudPricingProvider{
-		aws:      aws,
 		azure:    NewAzureProvider(),
 		fallback: NewStaticProvider(),
 	}, nil
+}
+
+func (p *CloudPricingProvider) initAWS(ctx context.Context) {
+	p.awsOnce.Do(func() {
+		prov, err := NewAWSProvider(ctx)
+		if err != nil {
+			slog.Debug("aws pricing api unavailable", "err", err)
+			return
+		}
+		p.aws = prov
+	})
 }
 
 func (p *CloudPricingProvider) SetCustomPricing(cp *CustomPricing) {
 	p.customPricing = cp
 }
 
-const spotFallbackMultiplier = 0.21
+const (
+	spotFallbackMultiplier = 0.21
+	hoursPerMonth          = 730.0 // 365 * 24 / 12
+)
+
+func (p *CloudPricingProvider) detectCloud(node collector.NodeInfo) {
+	p.cloudOnce.Do(func() {
+		if node.CloudProvider != collector.CloudUnknown {
+			p.detectedCloud = node.CloudProvider
+		}
+		if node.Region != "" {
+			p.fallback.SetRegion(node.Region)
+		}
+	})
+}
 
 func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
-	if node.Region != "" {
-		p.fallback.SetRegion(node.Region)
-	}
-	if p.detectedCloud == "" && node.CloudProvider != collector.CloudUnknown {
-		p.detectedCloud = node.CloudProvider
-	}
+	p.detectCloud(node)
+	return p.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
+}
 
-	var cloudName string
-	switch node.CloudProvider {
+func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
+	cloudName := ""
+	switch p.detectedCloud {
 	case collector.CloudAWS:
 		cloudName = "aws"
 	case collector.CloudAzure:
@@ -51,86 +72,50 @@ func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node c
 		cloudName = "gcp"
 	}
 
-	if node.IsSpot {
-		switch node.CloudProvider {
+	if isSpot {
+		switch p.detectedCloud {
 		case collector.CloudAWS:
+			p.initAWS(ctx)
 			if p.aws != nil {
-				if price, err := p.aws.GetHourlyPrice(ctx, node.InstanceType, node.Region, true); err == nil {
+				if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true); err == nil {
 					return price, nil
 				}
 			}
 		case collector.CloudAzure:
-			if p.azure != nil {
-				if price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, true); err == nil {
-					return price, nil
-				}
+			if price, err := p.azure.GetHourlyPrice(ctx, instanceType, region, true); err == nil {
+				return price, nil
 			}
 		}
 		if cloudName != "" {
-			if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
-				savings, _, ok := lookupSpotAdvisor(node.InstanceType, node.Region)
+			if price, err := GetEmbeddedPrice(cloudName, region, instanceType); err == nil {
+				savings, _, ok := lookupSpotAdvisor(instanceType, region)
 				if ok && savings > 0 {
 					return price * (1 - float64(savings)/100.0), nil
 				}
 				return price * spotFallbackMultiplier, nil
 			}
 		}
-		return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, true)
+		return p.fallback.GetHourlyPrice(ctx, instanceType, region, true)
 	}
 
-	switch node.CloudProvider {
+	switch p.detectedCloud {
 	case collector.CloudAWS:
+		p.initAWS(ctx)
 		if p.aws != nil {
-			if price, err := p.aws.GetHourlyPrice(ctx, node.InstanceType, node.Region, false); err == nil {
+			if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false); err == nil {
 				return price, nil
 			}
 		}
 	case collector.CloudAzure:
-		if p.azure != nil {
-			if price, err := p.azure.GetHourlyPrice(ctx, node.InstanceType, node.Region, false); err == nil {
-				return price, nil
-			}
+		if price, err := p.azure.GetHourlyPrice(ctx, instanceType, region, false); err == nil {
+			return price, nil
 		}
 	}
 
 	if cloudName != "" {
-		if price, err := GetEmbeddedPrice(cloudName, node.Region, node.InstanceType); err == nil {
-			slog.Debug("using embedded pricing",
-				"instance_type", node.InstanceType, "region", node.Region)
+		if price, err := GetEmbeddedPrice(cloudName, region, instanceType); err == nil {
 			return price, nil
 		}
-	}
-
-	slog.Warn("using static fallback pricing",
-		"instance_type", node.InstanceType, "region", node.Region)
-	return p.fallback.GetHourlyPrice(ctx, node.InstanceType, node.Region, false)
-}
-
-func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
-	if isSpot {
-		if p.aws != nil {
-			if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true); err == nil {
-				return price, nil
-			}
-		}
-		if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
-			savings, _, ok := lookupSpotAdvisor(instanceType, region)
-			if ok && savings > 0 {
-				return price * (1 - float64(savings)/100.0), nil
-			}
-			return price * spotFallbackMultiplier, nil
-		}
-		return p.fallback.GetHourlyPrice(ctx, instanceType, region, true)
-	}
-
-	if p.aws != nil {
-		if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false); err == nil {
-			return price, nil
-		}
-	}
-
-	if price, err := GetEmbeddedPrice("aws", region, instanceType); err == nil {
-		return price, nil
 	}
 
 	return p.fallback.GetHourlyPrice(ctx, instanceType, region, false)
@@ -173,26 +158,27 @@ func (p *CloudPricingProvider) GetNodePricing(ctx context.Context, node collecto
 }
 
 func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(ctx context.Context, storageClass string) float64 {
-	// Custom pricing override
 	if p.customPricing != nil && p.customPricing.StoragePricePerGiBMo > 0 {
 		return p.customPricing.StoragePricePerGiBMo
 	}
 
 	region := p.fallback.region
 
-	// AWS EBS — API first
-	if p.aws != nil && region != "" {
-		price, err := p.aws.GetEBSPrice(ctx, storageClass, region)
-		if err == nil && price > 0 {
-			return price
-		}
-	}
-
-	// Azure Managed Disk — API first
-	if p.azure != nil && region != "" {
-		price, err := p.azure.GetDiskPrice(ctx, storageClass, region)
-		if err == nil && price > 0 {
-			return price
+	if region != "" {
+		switch p.detectedCloud {
+		case collector.CloudAWS:
+			p.initAWS(ctx)
+			if p.aws != nil {
+				price, err := p.aws.GetEBSPrice(ctx, storageClass, region)
+				if err == nil && price > 0 {
+					return price
+				}
+			}
+		case collector.CloudAzure:
+			price, err := p.azure.GetDiskPrice(ctx, storageClass, region)
+			if err == nil && price > 0 {
+				return price
+			}
 		}
 	}
 
@@ -202,19 +188,19 @@ func (p *CloudPricingProvider) GetStoragePricePerGiBMonth(ctx context.Context, s
 func (p *CloudPricingProvider) GetLoadBalancerPricePerHour() float64 {
 	switch p.detectedCloud {
 	case collector.CloudAWS:
-		// Try live API first, fallback to default
+		p.initAWS(context.Background())
 		if p.aws != nil && p.fallback.region != "" {
 			if price, err := p.aws.GetLBPrice(context.Background(), p.fallback.region); err == nil {
 				return price
 			}
 		}
-		return 0.0225 // AWS ALB/NLB fallback (us-east-1)
+		return 0.0225
 	case collector.CloudAzure:
-		return 0.005 // Azure Standard public IP (per-service cost in AKS shared LB)
+		return 0.005
 	case collector.CloudGCP:
-		return 0.025 // GCP forwarding rule
+		return 0.025
 	default:
-		return 0.0225 // default
+		return 0.0225
 	}
 }
 
@@ -222,22 +208,87 @@ func (p *CloudPricingProvider) GetNetworkEgressPricePerGiB() float64 {
 	return p.fallback.GetNetworkEgressPricePerGiB()
 }
 
+func (p *CloudPricingProvider) GetRISaving(ctx context.Context, instanceType, region string) (saving float64, pct float64, ok bool) {
+	if region == "" {
+		return 0, 0, false
+	}
+	switch p.detectedCloud {
+	case collector.CloudAWS:
+		p.initAWS(ctx)
+		if p.aws == nil {
+			return 0, 0, false
+		}
+		riHourly, err := p.aws.GetRIHourlyPrice(ctx, instanceType, region)
+		if err != nil {
+			return 0, 0, false
+		}
+		odHourly, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false)
+		if err != nil {
+			return 0, 0, false
+		}
+		riMonthly := riHourly * hoursPerMonth
+		odMonthly := odHourly * hoursPerMonth
+		saving = odMonthly - riMonthly
+		if saving > 0 {
+			return saving, saving / odMonthly * 100, true
+		}
+	case collector.CloudAzure:
+		riMonthly, err := p.azure.GetRIMonthlyPrice(ctx, instanceType, region)
+		if err != nil {
+			return 0, 0, false
+		}
+		odHourly, err := p.azure.GetHourlyPrice(ctx, instanceType, region, false)
+		if err != nil {
+			return 0, 0, false
+		}
+		odMonthly := odHourly * hoursPerMonth
+		saving = odMonthly - riMonthly
+		if saving > 0 {
+			return saving, saving / odMonthly * 100, true
+		}
+	}
+	return 0, 0, false
+}
+
 func (p *CloudPricingProvider) GetSpotDiscount(ctx context.Context, instanceType, region string) SpotDiscount {
-	if p.aws != nil && region != "" {
-		spotPrice, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true)
+	if region == "" {
+		return SpotDiscount{Discount: 0, InterruptionRate: -1, Source: "unavailable"}
+	}
+
+	switch p.detectedCloud {
+	case collector.CloudAWS:
+		p.initAWS(ctx)
+		if p.aws != nil {
+			spotPrice, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true)
+			if err == nil && spotPrice > 0 {
+				onDemandPrice, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false)
+				if err == nil && onDemandPrice > 0 {
+					discount := 1 - (spotPrice / onDemandPrice)
+					if discount > 0 && discount < 1 {
+						_, ir, ok := lookupSpotAdvisor(instanceType, region)
+						irVal := -1
+						if ok {
+							irVal = ir
+						}
+						return SpotDiscount{
+							Discount:        discount,
+							InterruptionRate: irVal,
+							Source:          "api",
+						}
+					}
+				}
+			}
+		}
+	case collector.CloudAzure:
+		spotPrice, err := p.azure.GetHourlyPrice(ctx, instanceType, region, true)
 		if err == nil && spotPrice > 0 {
-			onDemandPrice, err := p.aws.GetHourlyPrice(ctx, instanceType, region, false)
+			onDemandPrice, err := p.azure.GetHourlyPrice(ctx, instanceType, region, false)
 			if err == nil && onDemandPrice > 0 {
 				discount := 1 - (spotPrice / onDemandPrice)
 				if discount > 0 && discount < 1 {
-					_, ir, ok := lookupSpotAdvisor(instanceType, region)
-					irVal := -1
-					if ok {
-						irVal = ir
-					}
 					return SpotDiscount{
 						Discount:        discount,
-						InterruptionRate: irVal,
+						InterruptionRate: -1,
 						Source:          "api",
 					}
 				}

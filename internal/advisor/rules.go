@@ -63,6 +63,14 @@ func calculateSpotSavings(report *analyzer.CostReport, discountRate float64) *Sa
 		}
 	}
 
+	if discountRate == 0 {
+		return &SavingsOpportunity{
+			Type:       "spot_conversion",
+			Applicable: false,
+			Reason:     "No spot pricing data available",
+		}
+	}
+
 	monthlySavings := onDemandCost * discountRate
 
 	return &SavingsOpportunity{

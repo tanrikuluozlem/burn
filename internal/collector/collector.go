@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -13,6 +15,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -93,6 +96,25 @@ func (c *Collector) listAllPods(ctx context.Context) ([]corev1.Pod, error) {
 		opts.Continue = list.Continue
 	}
 	return all, nil
+}
+
+// extractCloudDiskID returns the cloud provider volume ID from a PersistentVolume.
+// AWS CSI: vol-xxx, Azure CSI: /subscriptions/.../disks/disk-name
+// Falls back to legacy spec fields (awsElasticBlockStore, azureDisk).
+func extractCloudDiskID(pv *corev1.PersistentVolume) string {
+	if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle != "" {
+		return pv.Spec.CSI.VolumeHandle
+	}
+	if pv.Spec.AWSElasticBlockStore != nil {
+		return pv.Spec.AWSElasticBlockStore.VolumeID
+	}
+	if pv.Spec.AzureDisk != nil {
+		return pv.Spec.AzureDisk.DiskName
+	}
+	if pv.Spec.GCEPersistentDisk != nil {
+		return pv.Spec.GCEPersistentDisk.PDName
+	}
+	return ""
 }
 
 func (c *Collector) listAllPVCs(ctx context.Context) ([]corev1.PersistentVolumeClaim, error) {
@@ -179,14 +201,32 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 
 	// Enrich with Prometheus metrics if available
 	if c.prometheus != nil {
+		if c.prometheus.period != "" {
+			c.validatePeriod(ctx)
+		}
 		c.enrichWithMetrics(ctx, nodeInfos)
 	}
 
-	// Collect PVCs
+	// Collect PVCs and resolve cloud disk IDs from PersistentVolumes
 	pvcs, err := c.listAllPVCs(ctx)
 	if err != nil {
 		log.Printf("warning: failed to list PVCs: %v", err)
 	}
+
+	// Build PV name → cloud disk ID map
+	pvDiskIDs := make(map[string]string)
+	pvList, pvErr := c.client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if pvErr != nil {
+		log.Printf("warning: failed to list PVs: %v", pvErr)
+	} else {
+		for _, pv := range pvList.Items {
+			diskID := extractCloudDiskID(&pv)
+			if diskID != "" {
+				pvDiskIDs[pv.Name] = diskID
+			}
+		}
+	}
+
 	var pvcInfos []PVCInfo
 	if pvcs != nil {
 		for _, pvc := range pvcs {
@@ -207,6 +247,7 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 				StorageClass:   sc,
 				RequestedBytes: reqBytes,
 				VolumeName:     pvc.Spec.VolumeName,
+				CloudDiskID:    pvDiskIDs[pvc.Spec.VolumeName],
 			})
 		}
 	}
@@ -220,9 +261,17 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	if services != nil {
 		for _, svc := range services {
 			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+				hostname := ""
+				if len(svc.Status.LoadBalancer.Ingress) > 0 {
+					hostname = svc.Status.LoadBalancer.Ingress[0].Hostname
+					if hostname == "" {
+						hostname = svc.Status.LoadBalancer.Ingress[0].IP
+					}
+				}
 				lbInfos = append(lbInfos, LBServiceInfo{
 					Name:      svc.Name,
 					Namespace: svc.Namespace,
+					Hostname:  hostname,
 				})
 			}
 		}
@@ -269,12 +318,42 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	}, nil
 }
 
+// Period returns the effective analysis period (may be adjusted if Prometheus data is limited).
+func (c *Collector) Period() string {
+	if c.prometheus != nil {
+		return c.prometheus.period
+	}
+	return ""
+}
+
+func (c *Collector) validatePeriod(ctx context.Context) {
+	requestedDays := PeriodToDays(c.prometheus.period)
+	if requestedDays <= 0 {
+		return
+	}
+
+	availableDays := c.prometheus.CheckDataRange(ctx)
+	if availableDays < 0 {
+		return // metric unavailable (managed Prometheus, federation) — skip check
+	}
+
+	if requestedDays > availableDays {
+		adjustedDays := int(availableDays)
+		if adjustedDays < 1 {
+			adjustedDays = 1
+		}
+		adjusted := fmt.Sprintf("%dd", adjustedDays)
+		log.Printf("warning: requested --period %s but Prometheus has only %dd of data — using %s",
+			c.prometheus.period, adjustedDays, adjusted)
+		c.prometheus.period = adjusted
+	}
+}
+
 func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 	// Each query writes to its own variable — no shared writes, no mutex needed
 	var (
 		nodeCPU   map[string]float64
 		nodeMem   map[string]int64
-		nodeNet   map[string]float64
 		podCPU    map[string]float64
 		podMem    map[string]int64
 		podCPUP95 map[string]float64
@@ -297,15 +376,6 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 		nodeMem, err = c.prometheus.GetNodeMemoryUsage(gctx)
 		if err != nil {
 			log.Printf("warning: failed to get node memory metrics: %v", err)
-		}
-		return nil
-	})
-
-	g.Go(func() error {
-		var err error
-		nodeNet, err = c.prometheus.GetNodeNetworkEgress(gctx)
-		if err != nil {
-			log.Printf("warning: failed to get node network metrics: %v", err)
 		}
 		return nil
 	})
@@ -358,15 +428,11 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 	// Merge results (single-threaded after Wait — no races)
 	cpuByIP := make(map[string]float64)
 	memByIP := make(map[string]int64)
-	netByIP := make(map[string]float64)
 	for k, v := range nodeCPU {
 		cpuByIP[extractIP(k)] = v
 	}
 	for k, v := range nodeMem {
 		memByIP[extractIP(k)] = v
-	}
-	for k, v := range nodeNet {
-		netByIP[extractIP(k)] = v
 	}
 
 	for i := range nodes {
@@ -379,9 +445,6 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 		}
 		if mem, ok := memByIP[ip]; ok {
 			nodes[i].MemoryUsage = mem
-		}
-		if net, ok := netByIP[ip]; ok {
-			nodes[i].NetworkEgressBytesPerSec = net
 		}
 
 		for j := range nodes[i].Pods {
@@ -431,6 +494,7 @@ func parseNode(node corev1.Node) NodeInfo {
 		GPUCount:       gpuCount,
 		GPUType:        gpuType,
 		IsSpot:         isSpotInstance(labels),
+		CreatedAt:      node.CreationTimestamp.Time,
 		ProviderID:     node.Spec.ProviderID,
 		Labels:         labels,
 	}
@@ -580,10 +644,10 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			if d.Spec.Strategy.Type == appsv1.RollingUpdateDeploymentStrategyType &&
 				d.Spec.Strategy.RollingUpdate != nil &&
 				d.Spec.Strategy.RollingUpdate.MaxUnavailable != nil {
-				w.MaxUnavailable = int32(d.Spec.Strategy.RollingUpdate.MaxUnavailable.IntValue())
+				w.MaxUnavailable = resolveIntOrPercent(d.Spec.Strategy.RollingUpdate.MaxUnavailable, w.Replicas)
 			}
 
-			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, d.Spec.Selector.MatchLabels)
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, d.Spec.Selector.MatchLabels, w.Replicas)
 
 			workloads = append(workloads, w)
 		}
@@ -613,7 +677,7 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			w.HasLocalStorage = hasLocalStorage(s.Spec.Template.Spec.Volumes) || len(s.Spec.VolumeClaimTemplates) > 0
 			w.HasGPU = hasGPURequest(s.Spec.Template.Spec.Containers)
 			w.PriorityClass = s.Spec.Template.Spec.PriorityClassName
-			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, s.Spec.Selector.MatchLabels)
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, s.Spec.Selector.MatchLabels, w.Replicas)
 			workloads = append(workloads, w)
 		}
 		if list.Continue == "" {
@@ -640,7 +704,7 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			w.HasGPU = hasGPURequest(ds.Spec.Template.Spec.Containers)
 			w.PriorityClass = ds.Spec.Template.Spec.PriorityClassName
 			if ds.Spec.Selector != nil {
-				w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, ds.Spec.Selector.MatchLabels)
+				w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, ds.Spec.Selector.MatchLabels, w.Replicas)
 			}
 			workloads = append(workloads, w)
 		}
@@ -677,14 +741,17 @@ func isGPUResource(name string) bool {
 
 func hasLocalStorage(volumes []corev1.Volume) bool {
 	for _, v := range volumes {
-		if v.EmptyDir != nil || v.HostPath != nil {
+		if v.HostPath != nil {
+			return true
+		}
+		if v.EmptyDir != nil && v.EmptyDir.Medium != corev1.StorageMediumMemory {
 			return true
 		}
 	}
 	return false
 }
 
-func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]string) (minAvail int32, maxUnavail int32, found bool) {
+func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]string, replicas int32) (minAvail int32, maxUnavail int32, found bool) {
 	for _, pdb := range pdbs {
 		if pdb.Spec.Selector == nil {
 			continue
@@ -695,12 +762,24 @@ func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]str
 		}
 		if selector.Matches(labels.Set(workloadLabels)) {
 			if pdb.Spec.MinAvailable != nil {
-				return int32(pdb.Spec.MinAvailable.IntValue()), 0, true
+				return resolveIntOrPercent(pdb.Spec.MinAvailable, replicas), 0, true
 			}
 			if pdb.Spec.MaxUnavailable != nil {
-				return 0, int32(pdb.Spec.MaxUnavailable.IntValue()), true
+				return 0, resolveIntOrPercent(pdb.Spec.MaxUnavailable, replicas), true
 			}
 		}
 	}
 	return 0, 0, false
+}
+
+func resolveIntOrPercent(val *intstr.IntOrString, total int32) int32 {
+	if val.Type == intstr.Int {
+		return int32(val.IntValue())
+	}
+	pctStr := strings.TrimSuffix(val.StrVal, "%")
+	pct, err := strconv.Atoi(pctStr)
+	if err != nil || total <= 0 {
+		return 0
+	}
+	return int32(math.Ceil(float64(pct) * float64(total) / 100.0))
 }

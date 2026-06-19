@@ -9,16 +9,7 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/output"
 )
 
-// FormatOptions configures report formatting
-type FormatOptions struct {
-	ShowAllPods bool
-}
-
 func FormatCostReport(report *analyzer.CostReport) *Message {
-	return FormatCostReportWithOptions(report, FormatOptions{})
-}
-
-func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions) *Message {
 	idlePercent := 0.0
 	if report.MonthlyCost > 0 {
 		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
@@ -71,9 +62,7 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 
 	if len(report.Namespaces) > 0 {
 		nsLines := make([]string, 0, len(report.Namespaces))
-		var allocated float64
 		for _, ns := range report.Namespaces {
-			allocated += ns.MonthlyCost
 			if hasPrometheus {
 				nsLines = append(nsLines, fmt.Sprintf("• `%s` — %d pods — $%.2f/mo\n    CPU: %s req → %s used | MEM: %s req → %s used",
 					ns.Name, ns.PodCount, ns.MonthlyCost,
@@ -84,9 +73,8 @@ func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions
 					ns.Name, ns.PodCount, ns.MonthlyCost))
 			}
 		}
-		idle := report.MonthlyCost - allocated
-		if idle > 0 {
-			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.2f/mo", idle))
+		if report.TotalIdleCost > 0 {
+			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.2f/mo", report.TotalIdleCost))
 		}
 		nsLines = append(nsLines, fmt.Sprintf("*Total: $%.2f/mo*", report.MonthlyCost))
 		blocks = append(blocks, Block{
@@ -243,41 +231,6 @@ func FormatAIReport(report *advisor.Report) *Message {
 	}
 
 	return &Message{Blocks: blocks}
-}
-
-func FormatQuickCost(report *analyzer.CostReport) *Message {
-	metricsNote := "(based on requests)"
-	if report.MetricsSource == "prometheus" {
-		metricsNote = "(based on actual usage)"
-	}
-
-	idlePercent := 0.0
-	if report.MonthlyCost > 0 {
-		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
-	}
-
-	text := fmt.Sprintf("*Cluster Cost Summary* %s\n"+
-		"Nodes: %d | Pods: %d\n"+
-		"Monthly: $%.2f | Idle: $%.2f (%.0f%%)",
-		metricsNote,
-		report.TotalNodes, report.TotalPods,
-		report.MonthlyCost, report.TotalIdleCost, idlePercent)
-
-	if report.WasteAnalysis.PotentialSavings > 0 {
-		text += fmt.Sprintf("\n_Potential savings: $%.2f/mo_", report.WasteAnalysis.PotentialSavings)
-	}
-
-	return &Message{
-		Blocks: []Block{
-			{
-				Type: "section",
-				Text: &TextObject{
-					Type: "mrkdwn",
-					Text: text,
-				},
-			},
-		},
-	}
 }
 
 func severityEmoji(severity advisor.Severity) string {

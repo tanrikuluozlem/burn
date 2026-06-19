@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
+	"github.com/tanrikuluozlem/burn/internal/billing"
 	"github.com/tanrikuluozlem/burn/internal/collector"
 	"github.com/tanrikuluozlem/burn/internal/pricing"
 	"github.com/tanrikuluozlem/burn/internal/slack"
@@ -52,12 +55,22 @@ func init() {
 func runAsk(cmd *cobra.Command, args []string) error {
 	question := strings.Join(args, " ")
 
+	if verbose {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})))
+	}
+
+	if period != "" && !isValidPeriod(period) {
+		return fmt.Errorf("invalid period %q: use Prometheus duration format (e.g. 1h, 7d, 30d)", period)
+	}
+
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		return fmt.Errorf("ANTHROPIC_API_KEY not set")
 	}
 
-	if p := os.Getenv("PROMETHEUS_URL"); p != "" {
+	if p := os.Getenv("PROMETHEUS_URL"); p != "" && prometheusURL == "" {
 		prometheusURL = p
 	}
 
@@ -86,16 +99,73 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Detect cloud from node labels, not env vars
+	cloud := collector.CloudUnknown
+	for _, n := range info.Nodes {
+		if n.CloudProvider != collector.CloudUnknown {
+			cloud = n.CloudProvider
+			break
+		}
+	}
+
+	var billingContext string
+	if cloud == collector.CloudAzure {
+		if sub := os.Getenv("AZURE_SUBSCRIPTION_ID"); sub != "" {
+			azureCfg := billing.AzureConfig{SubscriptionID: sub, CostType: "amortized"}
+			azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
+			if err == nil {
+				dataDelay := 48 * time.Hour
+				end := time.Now().UTC().Add(-dataDelay)
+				start := end.AddDate(0, 0, -7)
+				estimatedCosts, pvEstimates, lbEstimates := billing.BuildEstimateMaps(report)
+				result, err := billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, 7)
+				if err == nil {
+					billing.EnrichCoverageGaps(ctx, result.CoverageGaps, pp)
+					if data, err := json.Marshal(result); err == nil {
+						billingContext = string(data)
+					}
+				}
+			}
+		}
+	} else if curDB := os.Getenv("CUR_DATABASE"); curDB != "" {
+		cfg := billing.AthenaConfig{
+			Database:       curDB,
+			Table:          os.Getenv("CUR_TABLE"),
+			OutputLocation: os.Getenv("CUR_OUTPUT_LOCATION"),
+			WorkGroup:      os.Getenv("CUR_WORKGROUP"),
+			Region:         os.Getenv("CUR_REGION"),
+		}
+		if cfg.WorkGroup == "" {
+			cfg.WorkGroup = "primary"
+		}
+		if billing.ValidateAthenaConfig(cfg) == nil {
+			athenaClient, err := billing.NewAthenaClient(ctx, cfg)
+			if err == nil {
+				dataDelay := 48 * time.Hour
+				end := time.Now().UTC().Add(-dataDelay)
+				start := end.AddDate(0, 0, -7)
+				reconciler := billing.NewReconciler(athenaClient)
+				result, err := reconciler.Reconcile(ctx, report, info, start, end)
+				if err == nil {
+					billing.EnrichCoverageGaps(ctx, result.CoverageGaps, pp)
+					if data, err := json.Marshal(result); err == nil {
+						billingContext = string(data)
+					}
+				}
+			}
+		}
+	}
+
 	fmt.Println("Thinking...")
 
 	answer, err := advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
 		fmt.Print(text)
-	})
+	}, billingContext)
 	if err != nil {
 		return err
 	}
 	fmt.Println()
-	_ = answer
+	fmt.Println("\nAnalysis based on cluster data. Run burn reconcile to verify.")
 
 	if askSlack {
 		webhook := askSlackWebhook

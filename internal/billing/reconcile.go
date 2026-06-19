@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"time"
@@ -47,53 +48,91 @@ func (r *Reconciler) Reconcile(
 
 	curCosts := AggregateCURByResource(queryResult.Items)
 
-	estimatedCosts := make(map[string]float64)
-	for _, n := range report.Nodes {
-		estimatedCosts[n.Name] = n.MonthlyPrice
-	}
+	estimatedCosts, pvEstimates, lbEstimates := BuildEstimateMaps(report)
 
 	periodDays := float64(queryResult.DaysQueried)
 	if periodDays == 0 {
 		periodDays = end.Sub(start).Hours() / 24
 	}
 	nodes, unmatchedCUR, unmatchedNodes := MatchNodesToCUR(
-		info.Nodes, estimatedCosts, curCosts, periodDays,
+		info.Nodes, estimatedCosts, curCosts, periodDays, start,
 	)
+
+	// Query non-compute costs (disk, LB, IP, EKS fee)
+	var warnings []string
+	diskItems, lbItems, ipItems, eksCost, extraScanned, ncErr := r.athena.QueryNonComputeCosts(ctx, start, end)
+	if ncErr != nil {
+		slog.Warn("non-compute cost queries failed", "err", ncErr)
+		warnings = append(warnings, fmt.Sprintf("non-compute cost queries partially failed: %v", ncErr))
+	}
+	queryResult.ScannedBytes += extraScanned
+
+	// Match disks to PVCs
+	var nodeNames []string
+	for _, n := range info.Nodes {
+		nodeNames = append(nodeNames, n.Name)
+	}
+	diskCosts := AggregateCURByResource(diskItems)
+	matchedDisks, orphanedDisks := MatchDisksToPVCs(info.PVCs, pvEstimates, diskCosts, nodeNames, periodDays)
+
+	// Match LBs to services
+	lbCosts := AggregateCURByResource(lbItems)
+	matchedLBs, orphanedLBs := MatchLBsToServices(info.LoadBalancers, lbEstimates, lbCosts, periodDays)
+
+	// Public IPs
+	var publicIPs []PublicIPReconciliation
+	ipCosts := AggregateCURByResource(ipItems)
+	for id, agg := range ipCosts {
+		monthly := 0.0
+		if periodDays > 0 {
+			monthly = agg.TotalCost / periodDays * DaysPerMonth
+		}
+		publicIPs = append(publicIPs, PublicIPReconciliation{
+			Name:       id,
+			ActualCost: monthly,
+		})
+	}
+
+	// EKS management fee
+	mgmtMonthly := 0.0
+	if periodDays > 0 {
+		mgmtMonthly = eksCost / periodDays * DaysPerMonth
+	}
 
 	var totalEst, totalActual float64
 	var riCount, spCount, spotCount, odCount int
 	var riSavings, spSavings, spotSavings float64
 
 	for _, n := range nodes {
-		if n.MatchMethod == "unmatched" {
-			continue
-		}
 		totalEst += n.EstimatedMonthlyCost
 		totalActual += n.ActualCost
-
-		saving := n.EstimatedMonthlyCost - n.ActualCost
-		if saving < 0 {
-			saving = 0
-		}
 
 		switch n.PricingTerm {
 		case "Reserved":
 			riCount++
-			riSavings += saving
 		case "SavingsPlan":
 			spCount++
-			spSavings += saving
 		case "Spot":
 			spotCount++
-			spotSavings += saving
 		case "OnDemand":
 			odCount++
+		}
+
+		saving := n.EstimatedMonthlyCost - n.ActualCost
+		if saving <= 0 {
+			continue
+		}
+		computeTotal := n.OnDemandCost + n.SPCost + n.RICost + n.SpotCost
+		if computeTotal > 0 {
+			spSavings += saving * n.SPCost / computeTotal
+			riSavings += saving * n.RICost / computeTotal
+			spotSavings += saving * n.SpotCost / computeTotal
 		}
 	}
 
 	var splitCosts map[string]float64
 	if colSet.HasSplitLineItem {
-		sc, err := r.athena.QuerySplitCostAllocation(ctx, start, end)
+		sc, err := r.athena.QuerySplitCostAllocation(ctx, start, end, colSet)
 		if err != nil {
 			slog.Warn("split cost allocation query failed, using proportional", "err", err)
 		} else {
@@ -103,10 +142,55 @@ func (r *Reconciler) Reconcile(
 
 	nsReconciliations := reconcileNamespaces(report.Namespaces, totalEst, totalActual, splitCosts, periodDays)
 
-	totalDiff := totalActual - totalEst
-	totalDiffPercent := 0.0
-	if totalEst > 0 {
-		totalDiffPercent = totalDiff / totalEst * 100
+	coverageGaps := DetectCoverageGaps(nodes)
+	allLBs := append(matchedLBs, orphanedLBs...)
+
+	// Infrastructure summary
+	var diskEstTotal, diskActTotal, lbEstTotal, lbActTotal, ipActTotal float64
+	for _, d := range matchedDisks {
+		diskEstTotal += d.EstimatedCost
+		diskActTotal += d.ActualCost
+	}
+	for _, d := range orphanedDisks {
+		diskActTotal += d.ActualCost
+	}
+	for _, l := range allLBs {
+		lbEstTotal += l.EstimatedCost
+		lbActTotal += l.ActualCost
+	}
+	for _, p := range publicIPs {
+		ipActTotal += p.ActualCost
+	}
+
+	var totalAllCompute float64
+	for _, agg := range curCosts {
+		if periodDays > 0 {
+			totalAllCompute += agg.TotalCost / periodDays * DaysPerMonth
+		}
+	}
+	unmatchedCompute := totalAllCompute - totalActual
+	if unmatchedCompute < 0 {
+		unmatchedCompute = 0
+	}
+
+	infra := &InfrastructureSummary{
+		ComputeEstimated: totalEst,
+		ComputeActual:    totalActual,
+		UnmatchedCompute: unmatchedCompute,
+		DiskEstimated:    diskEstTotal,
+		DiskActual:       diskActTotal,
+		LBEstimated:      lbEstTotal,
+		LBActual:         lbActTotal,
+		PublicIPActual:   ipActTotal,
+		ManagementFee:    mgmtMonthly,
+	}
+	infra.TotalEstimated = infra.ComputeEstimated + infra.DiskEstimated + infra.LBEstimated
+	infra.TotalActual = infra.ComputeActual + infra.UnmatchedCompute + infra.DiskActual + infra.LBActual + infra.PublicIPActual + infra.ManagementFee
+
+	infraDiff := infra.TotalActual - infra.TotalEstimated
+	infraDiffPct := 0.0
+	if infra.TotalEstimated > 0 {
+		infraDiffPct = infraDiff / infra.TotalEstimated * 100
 	}
 
 	return &ReconciliationReport{
@@ -114,10 +198,10 @@ func (r *Reconciler) Reconcile(
 		PeriodStart:        start,
 		PeriodEnd:          end,
 		DataDelay:          "CUR data delayed ~48h",
-		TotalEstimatedCost: totalEst,
-		TotalActualCost:    totalActual,
-		TotalDifference:    totalDiff,
-		TotalDiffPercent:   totalDiffPercent,
+		TotalEstimatedCost: infra.TotalEstimated,
+		TotalActualCost:    infra.TotalActual,
+		TotalDifference:    infraDiff,
+		TotalDiffPercent:   infraDiffPct,
 		Nodes:              nodes,
 		Namespaces:         nsReconciliations,
 		RINodeCount:        riCount,
@@ -133,6 +217,13 @@ func (r *Reconciler) Reconcile(
 		DaysQueried:        queryResult.DaysQueried,
 		DaysFailed:         queryResult.DaysFailed,
 		DataScannedBytes:   queryResult.ScannedBytes,
+		Disks:              matchedDisks,
+		OrphanedDisks:      orphanedDisks,
+		LoadBalancers:      allLBs,
+		PublicIPs:          publicIPs,
+		CoverageGaps:       coverageGaps,
+		InfraCost:          infra,
+		Warnings:           warnings,
 	}, nil
 }
 
@@ -150,28 +241,30 @@ func reconcileNamespaces(
 
 		if splitCosts != nil && periodDays > 0 {
 			if cost, ok := splitCosts[ns.Name]; ok {
-				actualCost = cost / periodDays * 30.44
+				actualCost = cost / periodDays * DaysPerMonth
 				hasSplit = true
 			}
 		}
 
+		computeCost := ns.MonthlyCost - ns.StorageCost
+
 		if !hasSplit {
 			ratio := 0.0
 			if totalEstimated > 0 {
-				ratio = ns.MonthlyCost / totalEstimated
+				ratio = computeCost / totalEstimated
 			}
 			actualCost = totalActual * ratio
 		}
 
-		diff := actualCost - ns.MonthlyCost
+		diff := actualCost - computeCost
 		diffPercent := 0.0
-		if ns.MonthlyCost > 0 {
-			diffPercent = diff / ns.MonthlyCost * 100
+		if computeCost > 0 {
+			diffPercent = diff / computeCost * 100
 		}
 
 		results = append(results, NamespaceReconciliation{
 			Name:          ns.Name,
-			EstimatedCost: ns.MonthlyCost,
+			EstimatedCost: computeCost,
 			ActualCost:    actualCost,
 			Difference:    diff,
 			DiffPercent:   diffPercent,

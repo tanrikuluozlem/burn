@@ -66,6 +66,8 @@ func (a *AthenaClient) DetectColumns(ctx context.Context) (CURColumnSet, error) 
 			colSet.HasEffectiveCost = true
 		case strings.HasPrefix(col, "split_line_item"):
 			colSet.HasSplitLineItem = true
+		case col == "resource_tags":
+			colSet.HasResourceTags = true
 		}
 	}
 
@@ -198,20 +200,27 @@ WHERE line_item_product_code = 'AmazonEC2'
 	)
 }
 
-func (a *AthenaClient) QuerySplitCostAllocation(ctx context.Context, start, end time.Time) (map[string]float64, error) {
+func (a *AthenaClient) QuerySplitCostAllocation(ctx context.Context, start, end time.Time, colSet CURColumnSet) (map[string]float64, error) {
+	tagExpr := "resource_tags['aws:eks:namespace']"
+	if !colSet.HasResourceTags {
+		tagExpr = "tags['aws:eks:namespace']"
+	}
 	sql := fmt.Sprintf(
-		`SELECT tags['aws:eks:namespace'] AS ns,
+		`SELECT %s AS ns,
 		        SUM(split_line_item_split_cost) AS cost
 		 FROM %s.%s
 		 WHERE split_line_item_split_cost IS NOT NULL
-		   AND tags['aws:eks:namespace'] IS NOT NULL
-		   AND tags['aws:eks:namespace'] != ''
+		   AND %s IS NOT NULL
+		   AND %s != ''
 		   AND line_item_usage_start_date >= TIMESTAMP '%s'
 		   AND line_item_usage_start_date < TIMESTAMP '%s'
-		 GROUP BY tags['aws:eks:namespace']`,
+		 GROUP BY %s`,
+		tagExpr,
 		a.config.Database, a.config.Table,
+		tagExpr, tagExpr,
 		start.Format("2006-01-02 15:04:05"),
 		end.Format("2006-01-02 15:04:05"),
+		tagExpr,
 	)
 
 	rows, _, err := a.executeQuery(ctx, sql)
@@ -226,6 +235,138 @@ func (a *AthenaClient) QuerySplitCostAllocation(ctx context.Context, start, end 
 		}
 	}
 	return nsCosts, nil
+}
+
+// QueryNonComputeCosts fetches disk, LB, public IP, and EKS management costs in parallel.
+func (a *AthenaClient) QueryNonComputeCosts(ctx context.Context, start, end time.Time) (disk, lb, ip []CURLineItem, eksCost float64, scanned int64, err error) {
+	startTS := start.Format("2006-01-02 15:04:05")
+	endTS := end.Format("2006-01-02 15:04:05")
+	db := a.config.Database
+	table := a.config.Table
+
+	type queryResult struct {
+		items   []CURLineItem
+		cost    float64
+		scanned int64
+		err     error
+	}
+
+	queries := map[string]string{
+		"disk": fmt.Sprintf(
+			`SELECT line_item_resource_id, line_item_usage_type, line_item_usage_amount,
+			        line_item_unblended_cost, product_region_code
+			 FROM %s.%s
+			 WHERE line_item_product_code = 'AmazonEC2'
+			   AND line_item_resource_id LIKE 'vol-%%'
+			   AND line_item_usage_start_date >= TIMESTAMP '%s'
+			   AND line_item_usage_start_date < TIMESTAMP '%s'
+			   AND line_item_line_item_type IN ('Usage', 'DiscountedUsage', 'SavingsPlanCoveredUsage')`,
+			db, table, startTS, endTS),
+		"lb": fmt.Sprintf(
+			`SELECT line_item_resource_id, line_item_usage_type, line_item_usage_amount,
+			        line_item_unblended_cost, product_region_code
+			 FROM %s.%s
+			 WHERE line_item_product_code = 'AWSELB'
+			   AND line_item_usage_start_date >= TIMESTAMP '%s'
+			   AND line_item_usage_start_date < TIMESTAMP '%s'
+			   AND line_item_line_item_type = 'Usage'`,
+			db, table, startTS, endTS),
+		"ip": fmt.Sprintf(
+			`SELECT line_item_resource_id, line_item_usage_type, line_item_usage_amount,
+			        line_item_unblended_cost, product_region_code
+			 FROM %s.%s
+			 WHERE line_item_product_code = 'AmazonEC2'
+			   AND line_item_usage_type LIKE '%%ElasticIP%%'
+			   AND line_item_usage_start_date >= TIMESTAMP '%s'
+			   AND line_item_usage_start_date < TIMESTAMP '%s'`,
+			db, table, startTS, endTS),
+		"eks": fmt.Sprintf(
+			`SELECT SUM(line_item_unblended_cost) AS cost
+			 FROM %s.%s
+			 WHERE line_item_product_code = 'AmazonEKS'
+			   AND line_item_usage_start_date >= TIMESTAMP '%s'
+			   AND line_item_usage_start_date < TIMESTAMP '%s'`,
+			db, table, startTS, endTS),
+	}
+
+	results := make(map[string]*queryResult)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for name, sql := range queries {
+		wg.Add(1)
+		go func(name, sql string) {
+			defer wg.Done()
+			rows, s, qErr := a.executeQuery(ctx, sql)
+			mu.Lock()
+			results[name] = &queryResult{scanned: s, err: qErr}
+			if qErr == nil {
+				results[name].items = parseSimpleCostRows(rows, name)
+				if name == "eks" && len(rows) > 0 && len(rows[0]) > 0 {
+					results[name].cost = parseFloat(rows[0][0])
+				}
+			}
+			mu.Unlock()
+		}(name, sql)
+	}
+
+	wg.Wait()
+
+	var failCount int
+	for name, r := range results {
+		scanned += r.scanned
+		if r.err != nil {
+			slog.Warn("non-compute CUR query failed", "type", name, "err", r.err)
+			failCount++
+			continue
+		}
+	}
+
+	if r := results["disk"]; r != nil && r.err == nil {
+		disk = r.items
+	}
+	if r := results["lb"]; r != nil && r.err == nil {
+		lb = r.items
+	}
+	if r := results["ip"]; r != nil && r.err == nil {
+		ip = r.items
+	}
+	if r := results["eks"]; r != nil && r.err == nil {
+		eksCost = r.cost
+	}
+
+	if failCount == len(queries) {
+		return nil, nil, nil, 0, scanned, fmt.Errorf("all non-compute cost queries failed")
+	}
+
+	return disk, lb, ip, eksCost, scanned, nil
+}
+
+func parseSimpleCostRows(rows [][]string, category string) []CURLineItem {
+	cat := CategoryOther
+	switch category {
+	case "disk":
+		cat = CategoryDisk
+	case "lb":
+		cat = CategoryNetwork
+	case "ip":
+		cat = CategoryNetwork
+	}
+
+	var items []CURLineItem
+	for _, row := range rows {
+		if len(row) < 4 {
+			continue
+		}
+		items = append(items, CURLineItem{
+			ResourceID:    row[0],
+			UsageType:     row[1],
+			UsageAmount:   parseFloat(row[2]),
+			EffectiveCost: parseFloat(row[3]),
+			Category:      cat,
+		})
+	}
+	return items
 }
 
 func (a *AthenaClient) executeQuery(ctx context.Context, sql string) ([][]string, int64, error) {

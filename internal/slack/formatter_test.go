@@ -76,25 +76,6 @@ func TestFormatAIReport(t *testing.T) {
 	}
 }
 
-func TestFormatQuickCost(t *testing.T) {
-	report := &analyzer.CostReport{
-		TotalNodes:    3,
-		TotalPods:     20,
-		HourlyCost:    1.0,
-		MonthlyCost:   730.0,
-		TotalIdleCost: 200.0,
-	}
-
-	msg := FormatQuickCost(report)
-
-	if len(msg.Blocks) != 1 {
-		t.Errorf("expected 1 block, got %d", len(msg.Blocks))
-	}
-	if !strings.Contains(msg.Blocks[0].Text.Text, "730") {
-		t.Error("should contain monthly cost")
-	}
-}
-
 func TestSeverityEmoji(t *testing.T) {
 	tests := []struct {
 		sev  advisor.Severity

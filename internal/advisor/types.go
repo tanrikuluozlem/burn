@@ -5,9 +5,7 @@ import "time"
 type Category string
 
 const (
-	CategoryCost        Category = "cost"
-	CategoryPerformance Category = "performance"
-	CategoryReliability Category = "reliability"
+	CategoryCost Category = "cost"
 )
 
 type Severity string

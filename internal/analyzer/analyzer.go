@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	hoursPerMonth    = 730
+	hoursPerMonth    = 730.0
 	highIdlePercent  = 0.4
 	maxPodEfficiency = 10
 )
@@ -116,7 +116,7 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 		nsCosts := make(map[string]float64)
 		for _, ns := range report.Namespaces {
 			if ns.PodCount > 0 {
-				nsCosts[ns.Name] = ns.MonthlyCost / float64(ns.PodCount)
+				nsCosts[ns.Name] = (ns.MonthlyCost - ns.StorageCost) / float64(ns.PodCount)
 			}
 		}
 		for i := range info.Workloads {
@@ -140,14 +140,12 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 
 		// apply real spot discount to waste analysis
 		if report.WasteAnalysis.PotentialSavings > 0 {
-			discount := 0.0
 			for _, s := range report.SpotReadiness {
 				if s.Status == "spot-ready" && s.Discount > 0 {
-					discount = s.Discount
+					report.WasteAnalysis.PotentialSavings *= s.Discount
 					break
 				}
 			}
-			report.WasteAnalysis.PotentialSavings *= discount
 		}
 	}
 

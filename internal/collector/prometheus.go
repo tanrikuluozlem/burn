@@ -116,7 +116,7 @@ func (p *PrometheusClient) retryableDo(req *http.Request) (*http.Response, error
 		}
 	}
 
-	return resp, err
+	return nil, fmt.Errorf("prometheus: request failed")
 }
 
 func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResult, error) {
@@ -152,7 +152,7 @@ func (p *PrometheusClient) Query(ctx context.Context, query string) ([]promResul
 }
 
 func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]float64, error) {
-	// Use instance label (standard node-exporter) - try node label first (kube-prometheus-stack)
+	// Use instance label (standard node-exporter)
 	query := p.wrapQuery(`sum(rate(node_cpu_seconds_total{mode!="idle"}[5m])) by (instance)`)
 	results, err := p.Query(ctx, query)
 	if err != nil {
@@ -161,10 +161,7 @@ func (p *PrometheusClient) GetNodeCPUUsage(ctx context.Context) (map[string]floa
 
 	usage := make(map[string]float64)
 	for _, r := range results {
-		node := r.Metric["node"]
-		if node == "" {
-			node = r.Metric["instance"]
-		}
+		node := r.Metric["instance"]
 		if node == "" {
 			continue
 		}
@@ -184,10 +181,7 @@ func (p *PrometheusClient) GetNodeMemoryUsage(ctx context.Context) (map[string]i
 
 	usage := make(map[string]int64)
 	for _, r := range results {
-		node := r.Metric["node"]
-		if node == "" {
-			node = r.Metric["instance"]
-		}
+		node := r.Metric["instance"]
 		if node == "" {
 			continue
 		}

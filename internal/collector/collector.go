@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -13,6 +15,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -641,10 +644,10 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			if d.Spec.Strategy.Type == appsv1.RollingUpdateDeploymentStrategyType &&
 				d.Spec.Strategy.RollingUpdate != nil &&
 				d.Spec.Strategy.RollingUpdate.MaxUnavailable != nil {
-				w.MaxUnavailable = int32(d.Spec.Strategy.RollingUpdate.MaxUnavailable.IntValue())
+				w.MaxUnavailable = resolveIntOrPercent(d.Spec.Strategy.RollingUpdate.MaxUnavailable, w.Replicas)
 			}
 
-			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, d.Spec.Selector.MatchLabels)
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, d.Spec.Selector.MatchLabels, w.Replicas)
 
 			workloads = append(workloads, w)
 		}
@@ -674,7 +677,7 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			w.HasLocalStorage = hasLocalStorage(s.Spec.Template.Spec.Volumes) || len(s.Spec.VolumeClaimTemplates) > 0
 			w.HasGPU = hasGPURequest(s.Spec.Template.Spec.Containers)
 			w.PriorityClass = s.Spec.Template.Spec.PriorityClassName
-			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, s.Spec.Selector.MatchLabels)
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, s.Spec.Selector.MatchLabels, w.Replicas)
 			workloads = append(workloads, w)
 		}
 		if list.Continue == "" {
@@ -701,7 +704,7 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			w.HasGPU = hasGPURequest(ds.Spec.Template.Spec.Containers)
 			w.PriorityClass = ds.Spec.Template.Spec.PriorityClassName
 			if ds.Spec.Selector != nil {
-				w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, ds.Spec.Selector.MatchLabels)
+				w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, ds.Spec.Selector.MatchLabels, w.Replicas)
 			}
 			workloads = append(workloads, w)
 		}
@@ -738,14 +741,17 @@ func isGPUResource(name string) bool {
 
 func hasLocalStorage(volumes []corev1.Volume) bool {
 	for _, v := range volumes {
-		if v.EmptyDir != nil || v.HostPath != nil {
+		if v.HostPath != nil {
+			return true
+		}
+		if v.EmptyDir != nil && v.EmptyDir.Medium != corev1.StorageMediumMemory {
 			return true
 		}
 	}
 	return false
 }
 
-func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]string) (minAvail int32, maxUnavail int32, found bool) {
+func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]string, replicas int32) (minAvail int32, maxUnavail int32, found bool) {
 	for _, pdb := range pdbs {
 		if pdb.Spec.Selector == nil {
 			continue
@@ -756,12 +762,24 @@ func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]str
 		}
 		if selector.Matches(labels.Set(workloadLabels)) {
 			if pdb.Spec.MinAvailable != nil {
-				return int32(pdb.Spec.MinAvailable.IntValue()), 0, true
+				return resolveIntOrPercent(pdb.Spec.MinAvailable, replicas), 0, true
 			}
 			if pdb.Spec.MaxUnavailable != nil {
-				return 0, int32(pdb.Spec.MaxUnavailable.IntValue()), true
+				return 0, resolveIntOrPercent(pdb.Spec.MaxUnavailable, replicas), true
 			}
 		}
 	}
 	return 0, 0, false
+}
+
+func resolveIntOrPercent(val *intstr.IntOrString, total int32) int32 {
+	if val.Type == intstr.Int {
+		return int32(val.IntValue())
+	}
+	pctStr := strings.TrimSuffix(val.StrVal, "%")
+	pct, err := strconv.Atoi(pctStr)
+	if err != nil || total <= 0 {
+		return 0
+	}
+	return int32(math.Ceil(float64(pct) * float64(total) / 100.0))
 }

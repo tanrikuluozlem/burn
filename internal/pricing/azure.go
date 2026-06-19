@@ -52,14 +52,9 @@ func (p *AzureProvider) GetHourlyPrice(ctx context.Context, vmSize, region strin
 }
 
 func (p *AzureProvider) fetchPrice(ctx context.Context, vmSize, region string, isSpot bool) (float64, error) {
-	priceType := "Consumption"
-	if isSpot {
-		priceType = "Spot"
-	}
-
 	filter := fmt.Sprintf(
-		"serviceName eq 'Virtual Machines' and armRegionName eq '%s' and armSkuName eq '%s' and priceType eq '%s'",
-		region, vmSize, priceType,
+		"serviceName eq 'Virtual Machines' and armRegionName eq '%s' and armSkuName eq '%s' and priceType eq 'Consumption'",
+		region, vmSize,
 	)
 	reqURL := fmt.Sprintf("%s?$filter=%s", azurePricingAPI, url.QueryEscape(filter))
 
@@ -109,10 +104,8 @@ type azurePricingResponse struct {
 
 type azurePriceItem struct {
 	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
 	ProductName     string  `json:"productName"`
 	SkuName         string  `json:"skuName"`
-	MeterName       string  `json:"meterName"`
 	ReservationTerm string  `json:"reservationTerm"`
 }
 

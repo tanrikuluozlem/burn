@@ -312,10 +312,12 @@ func (a *AthenaClient) QueryNonComputeCosts(ctx context.Context, start, end time
 
 	wg.Wait()
 
+	var failCount int
 	for name, r := range results {
 		scanned += r.scanned
 		if r.err != nil {
 			slog.Warn("non-compute CUR query failed", "type", name, "err", r.err)
+			failCount++
 			continue
 		}
 	}
@@ -331,6 +333,10 @@ func (a *AthenaClient) QueryNonComputeCosts(ctx context.Context, start, end time
 	}
 	if r := results["eks"]; r != nil && r.err == nil {
 		eksCost = r.cost
+	}
+
+	if failCount == len(queries) {
+		return nil, nil, nil, 0, scanned, fmt.Errorf("all non-compute cost queries failed")
 	}
 
 	return disk, lb, ip, eksCost, scanned, nil

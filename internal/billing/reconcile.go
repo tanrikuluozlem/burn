@@ -48,10 +48,7 @@ func (r *Reconciler) Reconcile(
 
 	curCosts := AggregateCURByResource(queryResult.Items)
 
-	estimatedCosts := make(map[string]float64)
-	for _, n := range report.Nodes {
-		estimatedCosts[n.Name] = n.MonthlyPrice
-	}
+	estimatedCosts, pvEstimates, lbEstimates := BuildEstimateMaps(report)
 
 	periodDays := float64(queryResult.DaysQueried)
 	if periodDays == 0 {
@@ -71,10 +68,6 @@ func (r *Reconciler) Reconcile(
 	queryResult.ScannedBytes += extraScanned
 
 	// Match disks to PVCs
-	pvEstimates := make(map[string]float64)
-	for _, pv := range report.PVCosts {
-		pvEstimates[pv.Namespace+"/"+pv.Name] = pv.MonthlyCost
-	}
 	var nodeNames []string
 	for _, n := range info.Nodes {
 		nodeNames = append(nodeNames, n.Name)
@@ -83,10 +76,6 @@ func (r *Reconciler) Reconcile(
 	matchedDisks, orphanedDisks := MatchDisksToPVCs(info.PVCs, pvEstimates, diskCosts, nodeNames, periodDays)
 
 	// Match LBs to services
-	lbEstimates := make(map[string]float64)
-	for _, lb := range report.LBCosts {
-		lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
-	}
 	lbCosts := AggregateCURByResource(lbItems)
 	matchedLBs, orphanedLBs := MatchLBsToServices(info.LoadBalancers, lbEstimates, lbCosts, periodDays)
 
@@ -173,9 +162,21 @@ func (r *Reconciler) Reconcile(
 		ipActTotal += p.ActualCost
 	}
 
+	var totalAllCompute float64
+	for _, agg := range curCosts {
+		if periodDays > 0 {
+			totalAllCompute += agg.TotalCost / periodDays * DaysPerMonth
+		}
+	}
+	unmatchedCompute := totalAllCompute - totalActual
+	if unmatchedCompute < 0 {
+		unmatchedCompute = 0
+	}
+
 	infra := &InfrastructureSummary{
 		ComputeEstimated: totalEst,
 		ComputeActual:    totalActual,
+		UnmatchedCompute: unmatchedCompute,
 		DiskEstimated:    diskEstTotal,
 		DiskActual:       diskActTotal,
 		LBEstimated:      lbEstTotal,
@@ -184,7 +185,7 @@ func (r *Reconciler) Reconcile(
 		ManagementFee:    mgmtMonthly,
 	}
 	infra.TotalEstimated = infra.ComputeEstimated + infra.DiskEstimated + infra.LBEstimated
-	infra.TotalActual = infra.ComputeActual + infra.DiskActual + infra.LBActual + infra.PublicIPActual + infra.ManagementFee
+	infra.TotalActual = infra.ComputeActual + infra.UnmatchedCompute + infra.DiskActual + infra.LBActual + infra.PublicIPActual + infra.ManagementFee
 
 	infraDiff := infra.TotalActual - infra.TotalEstimated
 	infraDiffPct := 0.0

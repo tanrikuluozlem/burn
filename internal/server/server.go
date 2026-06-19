@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -222,13 +223,13 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 }
 
 func (s *Server) handleAsk(ctx context.Context, question string) (string, error) {
-	report, err := s.getReport(ctx)
+	report, info, err := s.getReport(ctx)
 	if err != nil {
 		return "", err
 	}
 
 	var billingContext string
-	if summary := s.getReconciliationContext(ctx, report); summary != "" {
+	if summary := s.getReconciliationContext(ctx, report, info); summary != "" {
 		billingContext = summary
 	}
 
@@ -236,11 +237,11 @@ func (s *Server) handleAsk(ctx context.Context, question string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("*Q: %s*\n\n%s", question, answer), nil
+	return fmt.Sprintf("*Q: %s*\n\n%s\n\n_Analysis based on cluster data. Run burn reconcile to verify._", question, answer), nil
 }
 
 func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
-	report, err := s.getReport(ctx)
+	report, _, err := s.getReport(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -349,12 +350,7 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 		}
 	}
 
-	report, err := s.getReport(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	info, err := s.collector.Collect(ctx)
+	report, info, err := s.getReport(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -375,18 +371,7 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 		if err != nil {
 			return fmt.Sprintf("Azure connection failed: %v", err), nil
 		}
-		estimatedCosts := make(map[string]float64)
-		for _, n := range report.Nodes {
-			estimatedCosts[n.Name] = n.MonthlyPrice
-		}
-		pvEstimates := make(map[string]float64)
-		for _, pv := range report.PVCosts {
-			pvEstimates[pv.Namespace+"/"+pv.Name] = pv.MonthlyCost
-		}
-		lbEstimates := make(map[string]float64)
-		for _, lb := range report.LBCosts {
-			lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
-		}
+		estimatedCosts, pvEstimates, lbEstimates := billing.BuildEstimateMaps(report)
 		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, float64(days))
 		if err != nil {
 			return fmt.Sprintf("Azure cost query failed: %v", err), nil
@@ -420,14 +405,7 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 	}
 
 	// Enrich coverage gaps with real RI pricing from cloud APIs
-	for i := range result.CoverageGaps {
-		gap := &result.CoverageGaps[i]
-		saving, pct, ok := s.pricing.GetRISaving(ctx, gap.InstanceType, gap.Region)
-		if ok {
-			gap.PotentialSaving = saving
-			gap.Recommendation = fmt.Sprintf("$%.0f/mo (%.0f%% off) with 1yr Reserved Instance", saving, pct)
-		}
-	}
+	billing.EnrichCoverageGaps(ctx, result.CoverageGaps, s.pricing)
 
 	summary := fmt.Sprintf("*Reconciliation (%s - %s)*\n%s\n",
 		result.PeriodStart.Format("Jan 2"), result.PeriodEnd.Format("Jan 2, 2006"),
@@ -436,8 +414,18 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 	summary += "\n*Nodes:*"
 	for _, n := range result.Nodes {
 		diff := ""
-		if n.ActualCost > 0 {
-			diff = fmt.Sprintf(" (%+.0f%%)", n.DifferencePercent)
+		d := n.ActualCost - n.EstimatedMonthlyCost
+		if math.Abs(d) >= 0.005 {
+			if n.EstimatedMonthlyCost == 0 || n.ActualCost == 0 {
+				diff = fmt.Sprintf(" ($%+.2f)", d)
+			} else {
+				pct := d / n.EstimatedMonthlyCost * 100
+				if math.Round(pct) == 0 {
+					diff = fmt.Sprintf(" ($%+.2f)", d)
+				} else {
+					diff = fmt.Sprintf(" ($%+.2f, %+.0f%%)", d, pct)
+				}
+			}
 		}
 		summary += fmt.Sprintf("\n• `%s` %s — est $%.2f → actual $%.2f%s",
 			n.NodeName, n.PricingTerm, n.EstimatedMonthlyCost, n.ActualCost, diff)
@@ -467,9 +455,14 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 	}
 
 	if result.InfraCost != nil {
-		summary += fmt.Sprintf("\n\n*Infrastructure Total:*\nCompute: $%.2f | Storage: $%.2f | LB: $%.2f | IP: $%.2f\n*Total: $%.2f/mo* (est $%.2f)",
+		unreconciled := ""
+		if result.InfraCost.UnmatchedCompute > 0.005 {
+			unreconciled = fmt.Sprintf(" | Unreconciled: $%.2f", result.InfraCost.UnmatchedCompute)
+		}
+		summary += fmt.Sprintf("\n\n*Infrastructure Total:*\nCompute: $%.2f | Storage: $%.2f | LB: $%.2f | IP: $%.2f%s\n*Total: $%.2f/mo* (est $%.2f)",
 			result.InfraCost.ComputeActual, result.InfraCost.DiskActual,
 			result.InfraCost.LBActual, result.InfraCost.PublicIPActual,
+			unreconciled,
 			result.InfraCost.TotalActual, result.InfraCost.TotalEstimated)
 	} else {
 		summary += fmt.Sprintf("\n\n*Summary:*\nEstimated: $%.2f/mo\nActual: $%.2f/mo\nDifference: $%+.2f (%+.1f%%)",
@@ -480,28 +473,12 @@ func (s *Server) handleReconcile(ctx context.Context, text string) (string, erro
 	return summary, nil
 }
 
-func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.CostReport) string {
-	info, err := s.collector.Collect(ctx)
-	if err != nil {
-		return ""
-	}
+func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.CostReport, info *collector.ClusterInfo) string {
+	estimatedCosts, pvEstimates, lbEstimates := billing.BuildEstimateMaps(report)
 
-	estimatedCosts := make(map[string]float64)
-	for _, n := range report.Nodes {
-		estimatedCosts[n.Name] = n.MonthlyPrice
-	}
-	pvEstimates := make(map[string]float64)
-	for _, pv := range report.PVCosts {
-		pvEstimates[pv.Namespace+"/"+pv.Name] = pv.MonthlyCost
-	}
-	lbEstimates := make(map[string]float64)
-	for _, lb := range report.LBCosts {
-		lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
-	}
-
-	dataDelay := 24 * time.Hour
+	dataDelay := 48 * time.Hour
 	end := time.Now().UTC().Add(-dataDelay)
-	start := end.AddDate(0, 0, -2)
+	start := end.AddDate(0, 0, -7)
 
 	// Detect cloud from node labels, not env vars
 	cloud := collector.CloudUnknown
@@ -524,7 +501,7 @@ func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.
 		if err != nil {
 			return ""
 		}
-		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, 2)
+		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, 7)
 		if err != nil {
 			return ""
 		}
@@ -555,14 +532,7 @@ func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.
 		return ""
 	}
 
-	for i := range result.CoverageGaps {
-		gap := &result.CoverageGaps[i]
-		saving, pct, ok := s.pricing.GetRISaving(ctx, gap.InstanceType, gap.Region)
-		if ok {
-			gap.PotentialSaving = saving
-			gap.Recommendation = fmt.Sprintf("$%.0f/mo (%.0f%% off) with 1yr Reserved Instance", saving, pct)
-		}
-	}
+	billing.EnrichCoverageGaps(ctx, result.CoverageGaps, s.pricing)
 
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -572,7 +542,7 @@ func (s *Server) getReconciliationContext(ctx context.Context, report *analyzer.
 }
 
 func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error) {
-	report, err := s.getReport(ctx)
+	report, _, err := s.getReport(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -622,19 +592,19 @@ func (s *Server) handleNamespace(ctx context.Context, ns string) (string, error)
 	return result, nil
 }
 
-func (s *Server) getReport(ctx context.Context) (*analyzer.CostReport, error) {
+func (s *Server) getReport(ctx context.Context) (*analyzer.CostReport, *collector.ClusterInfo, error) {
 	info, err := s.collector.Collect(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to collect cluster data: %w", err)
+		return nil, nil, fmt.Errorf("failed to collect cluster data: %w", err)
 	}
 
 	report, err := analyzer.New(s.pricing).Analyze(ctx, info)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	report.Period = s.collector.Period()
 
-	return report, nil
+	return report, info, nil
 }
 
 func (s *Server) sendSlackResponse(responseURL, text string) {

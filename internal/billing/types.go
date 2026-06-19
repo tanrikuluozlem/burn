@@ -33,7 +33,7 @@ type CURLineItem struct {
 	SavingsPlanARN string
 	InstanceType   string
 	Region         string
-	Category       string // Compute, Disk, Network, Management, Other
+	Category       string
 }
 
 type CURColumnSet struct {
@@ -133,16 +133,17 @@ type CoverageGap struct {
 }
 
 type InfrastructureSummary struct {
-	ComputeEstimated float64 `json:"compute_estimated"`
-	ComputeActual    float64 `json:"compute_actual"`
-	DiskEstimated    float64 `json:"disk_estimated"`
-	DiskActual       float64 `json:"disk_actual"`
-	LBEstimated      float64 `json:"lb_estimated"`
-	LBActual         float64 `json:"lb_actual"`
-	PublicIPActual   float64 `json:"public_ip_actual"`
-	ManagementFee    float64 `json:"management_fee"`
-	TotalEstimated   float64 `json:"total_estimated"`
-	TotalActual      float64 `json:"total_actual"`
+	ComputeEstimated   float64 `json:"compute_estimated"`
+	ComputeActual      float64 `json:"compute_actual"`
+	UnmatchedCompute   float64 `json:"unmatched_compute"`
+	DiskEstimated      float64 `json:"disk_estimated"`
+	DiskActual         float64 `json:"disk_actual"`
+	LBEstimated        float64 `json:"lb_estimated"`
+	LBActual           float64 `json:"lb_actual"`
+	PublicIPActual     float64 `json:"public_ip_actual"`
+	ManagementFee      float64 `json:"management_fee"`
+	TotalEstimated     float64 `json:"total_estimated"`
+	TotalActual        float64 `json:"total_actual"`
 }
 
 type ReconciliationReport struct {

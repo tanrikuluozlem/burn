@@ -107,7 +107,7 @@ func (a *AzureCostClient) QueryCosts(ctx context.Context, start, end time.Time) 
 	// The Go SDK doesn't handle nextLink pagination automatically.
 	// For clusters with many resources over long periods, warn if truncated.
 	if result.Properties != nil && result.Properties.NextLink != nil && *result.Properties.NextLink != "" {
-		fmt.Printf("Warning: Azure cost query returned 5000+ rows — results may be truncated, try a shorter --days period\n")
+		slog.Warn("Azure cost query returned 5000+ rows — results may be truncated, try a shorter --days period")
 	}
 
 	return items, nil
@@ -123,7 +123,7 @@ func (a *AzureCostClient) queryWithRetry(ctx context.Context, scope string, quer
 		}
 		if strings.Contains(err.Error(), "429") && attempt < 2 {
 			wait := time.Duration(60*(attempt+1)) * time.Second
-			fmt.Printf("Rate limited, retrying in %v (%d/3)...\n", wait, attempt+2)
+			slog.Warn("rate limited, retrying", "delay", wait, "attempt", attempt+2)
 			time.Sleep(wait)
 			continue
 		}
@@ -216,7 +216,7 @@ func parseAzureCostResult(result armcostmanagement.QueryClientUsageResponse) []C
 	return items
 }
 
-// ReconcileAzure runs the full Azure reconciliation flow.
+
 func ReconcileAzure(ctx context.Context, client *AzureCostClient, nodes []collector.NodeInfo, estimatedCosts map[string]float64, namespaces []analyzer.NamespaceCost, pvcs []collector.PVCInfo, pvEstimates map[string]float64, lbs []collector.LBServiceInfo, lbEstimates map[string]float64, start, end time.Time, periodDays float64) (*ReconciliationReport, error) {
 	allItems, err := client.QueryCosts(ctx, start, end)
 	if err != nil {
@@ -340,9 +340,21 @@ func ReconcileAzure(ctx context.Context, client *AzureCostClient, nodes []collec
 		ipActTotal += p.ActualCost
 	}
 
+	var totalAllCompute float64
+	for _, agg := range curCosts {
+		if periodDays > 0 {
+			totalAllCompute += agg.TotalCost / periodDays * DaysPerMonth
+		}
+	}
+	unmatchedCompute := totalAllCompute - totalActual
+	if unmatchedCompute < 0 {
+		unmatchedCompute = 0
+	}
+
 	infra := &InfrastructureSummary{
 		ComputeEstimated: totalEst,
 		ComputeActual:    totalActual,
+		UnmatchedCompute: unmatchedCompute,
 		DiskEstimated:    diskEstTotal,
 		DiskActual:       diskActTotal,
 		LBEstimated:      lbEstTotal,
@@ -351,7 +363,7 @@ func ReconcileAzure(ctx context.Context, client *AzureCostClient, nodes []collec
 		ManagementFee:    mgmtMonthly,
 	}
 	infra.TotalEstimated = infra.ComputeEstimated + infra.DiskEstimated + infra.LBEstimated
-	infra.TotalActual = infra.ComputeActual + infra.DiskActual + infra.LBActual + infra.PublicIPActual + infra.ManagementFee
+	infra.TotalActual = infra.ComputeActual + infra.UnmatchedCompute + infra.DiskActual + infra.LBActual + infra.PublicIPActual + infra.ManagementFee
 
 	infraDiff := infra.TotalActual - infra.TotalEstimated
 	infraDiffPct := 0.0

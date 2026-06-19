@@ -322,7 +322,6 @@ func isOSDisk(diskID string, nodeNames []string) bool {
 	return false
 }
 
-// MatchLBsToServices matches billing LB costs to K8s LoadBalancer services.
 func MatchLBsToServices(
 	services []collector.LBServiceInfo,
 	lbEstimates map[string]float64, // key: "namespace/name"

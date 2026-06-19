@@ -575,8 +575,7 @@ func TestDetectCoverageGapsSkipsPartialSP(t *testing.T) {
 }
 
 func TestZeroPeriodDaysNoNaN(t *testing.T) {
-	// OpenCost #1746: division by zero produces NaN in JSON output.
-	// Burn must return 0, never NaN or Inf.
+	// Division by zero when periodDays is 0 must return 0, not NaN/Inf.
 	nodes := []collector.NodeInfo{
 		{Name: "node-1", ProviderID: "aws:///us-east-1a/i-aaa"},
 	}
@@ -611,8 +610,7 @@ func TestZeroEstimatedNoDivByZero(t *testing.T) {
 }
 
 func TestNegativeCostNeverProduced(t *testing.T) {
-	// OpenCost #3574: negative costs for CronJob namespaces.
-	// Burn must never produce negative actual cost.
+	// Zero-cost CUR items must not produce negative namespace costs.
 	nodes := []collector.NodeInfo{
 		{Name: "node-1", ProviderID: "aws:///us-east-1a/i-aaa"},
 	}
@@ -628,8 +626,7 @@ func TestNegativeCostNeverProduced(t *testing.T) {
 }
 
 func TestSpotAndOnDemandNeverSwapped(t *testing.T) {
-	// OpenCost #3259: Azure spot/on-demand prices swapped.
-	// Verify spot and on-demand items are correctly classified.
+	// Spot and on-demand pricing terms must not be swapped in aggregation.
 	items := []CURLineItem{
 		{ResourceID: "spot-vm", EffectiveCost: 5, UsageType: "BoxUsage", PricingTerm: "Spot"},
 		{ResourceID: "od-vm", EffectiveCost: 20, UsageType: "BoxUsage", PricingTerm: "OnDemand"},

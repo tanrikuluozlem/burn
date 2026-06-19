@@ -15,14 +15,17 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 
 ## Why burn
 
-- **Zero setup** — `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
-- **Full cost coverage** — Compute, storage, load balancers, and GPU costs with real-time cloud pricing.
-- **AI-powered** — Ask questions in plain English, get kubectl commands you can copy-paste.
-- **Slack-native** — `/burn` for instant cost reports. `/burn ask "..."` for AI analysis.
-- **Cloud + on-prem** — Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters.
-- **Spot readiness** — Identifies which workloads can safely move to spot instances with real-time discount and interruption rate.
-- **Ingress LB detection** — Detects load balancers from both Services and Ingress resources, with hostname deduplication.
-- **Time-aware** — `--period 7d` for weekly averages instead of point-in-time snapshots.
+- **Zero setup**: `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
+- **Full cost coverage**: Compute, storage, load balancers, and GPU costs with real-time cloud pricing.
+- **Billing reconciliation**: Verify cost estimates against your real AWS CUR or Azure Cost Management bill. Per node, per disk, per load balancer.
+- **SP/RI/Spot detection**: See which nodes have Savings Plan, Reserved Instance, or Spot coverage. Coverage gaps show real RI savings from cloud pricing APIs.
+- **Orphaned resource detection**: Find disks and load balancers you're paying for but not using.
+- **AI-powered**: Ask questions in plain English, get kubectl commands you can copy-paste.
+- **Slack-native**: `/burn` for instant cost reports. `/burn reconcile` for billing verification. `/burn ask "..."` for AI analysis.
+- **Cloud + on-prem**: Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters. Billing reconciliation supports AWS and Azure.
+- **Spot readiness**: Identifies which workloads can safely move to spot instances with real-time discount and interruption rate.
+- **Ingress LB detection**: Detects load balancers from both Services and Ingress resources, with hostname deduplication.
+- **Time-aware**: `--period 7d` for weekly averages instead of point-in-time snapshots.
 
 ## Install
 
@@ -67,6 +70,74 @@ burn analyze --prometheus http://prometheus:9090 --namespace argocd
 
 # Spot readiness
 burn analyze --prometheus http://prometheus:9090 --spot
+```
+
+## Billing reconciliation
+
+Every cost tool estimates. Burn checks it against your actual cloud bill.
+
+### AWS (CUR via Athena)
+
+![aws reconcile](assets/demo-reconcile-aws.gif)
+
+```bash
+# Pass CUR config as flags
+burn reconcile \
+  --cur-database my_cur_db \
+  --cur-table data \
+  --cur-output s3://my-bucket/athena-results/ \
+  --cur-region us-east-1
+
+# Or use environment variables
+export CUR_DATABASE=my_cur_db CUR_TABLE=data
+export CUR_OUTPUT_LOCATION=s3://my-bucket/athena-results/ CUR_REGION=us-east-1
+burn reconcile
+```
+
+### Azure (Cost Management API)
+
+![azure reconcile](assets/demo-reconcile-azure.gif)
+
+```bash
+# Pass subscription as flag
+burn reconcile --provider azure \
+  --azure-subscription YOUR-SUBSCRIPTION-ID
+
+# Or use environment variable
+export AZURE_SUBSCRIPTION_ID=YOUR-SUBSCRIPTION-ID
+burn reconcile --provider azure
+```
+
+What you get:
+- Per-node estimated vs actual cost with dollar difference
+- Savings Plan, Reserved Instance, and Spot pricing detected per node, including partial coverage
+- Coverage gaps with real 1-year RI pricing from AWS and Azure pricing APIs
+- Orphaned disks and load balancers in your bill with no matching K8s resource
+- OS disk costs separated from data disks
+- Public IP costs itemized
+- Namespace cost allocation (proportional or AWS split cost allocation)
+- EKS/AKS management fees tracked separately
+- Data transfer cost per node
+
+Works with both Legacy CUR and CUR 2.0. Run `burn reconcile --setup` for step-by-step setup instructions.
+
+Verified against AWS Cost Explorer and Azure Cost Management portal.
+
+### AI-powered reconciliation analysis
+
+![reconcile ai](assets/demo-reconcile-ai.gif)
+
+```bash
+burn reconcile --provider aws --ai
+```
+
+Shows why your estimated and actual costs differ, with commands to fix each issue.
+
+### Automation
+
+```bash
+# Pipe JSON output to your monitoring or alerting pipeline
+burn reconcile --provider aws -o json | jq .total_actual_cost
 ```
 
 ## Spot readiness
@@ -135,8 +206,10 @@ burn serve --port 8080 --prometheus http://prometheus:9090 --period 7d
 
 | Command | What you get |
 |---------|-------------|
-| `/burn` | Full cost report — nodes, namespaces, idle cost, LB, storage |
+| `/burn` | Full cost report: nodes, namespaces, idle cost, LB, storage |
 | `/burn ns argocd` | Pod-level breakdown for a namespace |
+| `/burn reconcile --provider aws` | Estimated vs actual billing, SP/RI/Spot detection |
+| `/burn reconcile --provider azure` | Estimated vs actual billing, SP/RI/Spot detection |
 | `/burn ask "what is the single biggest waste?"` | AI analysis with kubectl commands |
 
 ![Slack AI](assets/slack-ask.png)
@@ -165,11 +238,12 @@ Without custom pricing, cloud-equivalent rates are used as defaults.
 ## How it works
 
 ```
-Kubernetes API → nodes, pods, PVCs, services, ingresses
-Prometheus     → actual CPU & memory usage (optional)
-Cloud Pricing  → real VM, storage, and GPU prices (AWS, Azure, GCP)
+Kubernetes API   → nodes, pods, PVCs, services, ingresses
+Prometheus       → actual CPU & memory usage (optional)
+Cloud Pricing    → real VM, storage, GPU, and RI prices (AWS, Azure, GCP)
+AWS CUR / Azure  → actual billing data for reconciliation (optional)
          ↓
-    Cost Engine → compute, storage, load balancers, GPU, idle detection
+    Cost Engine  → estimates, reconciliation, SP/RI/Spot detection
          ↓
     CLI / Slack / AI Recommendations
 ```
@@ -178,9 +252,9 @@ Cloud Pricing  → real VM, storage, and GPU prices (AWS, Azure, GCP)
 
 | Priority | Source | When |
 |----------|--------|------|
-| 1 | AWS/Azure pricing API | AWS credentials available — real-time, region-aware |
-| 2 | Embedded pricing DB | No credentials — 600+ AWS, 300+ Azure instances, updated weekly |
-| 3 | Static fallback | Unknown instance type — estimates based on instance family |
+| 1 | AWS/Azure pricing API | Real-time, region-aware when credentials available |
+| 2 | Embedded pricing DB | 600+ AWS, 300+ Azure instances, updated weekly via CI |
+| 3 | Static fallback | Estimates based on instance family for unknown types |
 
 Storage and load balancer costs are fetched from cloud APIs when available, with static fallbacks. Usage-based charges (data processing, LCU) depend on traffic volume and are not included. GPU nodes are detected automatically and priced via ratio-based cost splitting.
 
@@ -240,6 +314,11 @@ spec:
 | `ANTHROPIC_API_KEY` | Claude API key | `--ai`, `ask`, `serve` |
 | `SLACK_WEBHOOK_URL` | Slack webhook URL | `--slack` |
 | `SLACK_SIGNING_SECRET` | Slack app signing secret | `serve` |
+| `CUR_DATABASE` | Athena database name | `reconcile` (AWS) |
+| `CUR_TABLE` | Athena table name | `reconcile` (AWS) |
+| `CUR_OUTPUT_LOCATION` | S3 path for Athena results | `reconcile` (AWS) |
+| `CUR_REGION` | AWS region for Athena | `reconcile` (AWS) |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID | `reconcile` (Azure) |
 
 | Flag | Description |
 |------|-------------|
@@ -248,8 +327,12 @@ spec:
 | `--gpu-price` | GPU cost per unit per hour (on-prem) |
 | `--storage-price` | Storage cost per GiB per month (on-prem) |
 | `--spot` | Show spot instance readiness details |
+| `--provider` | Cloud provider for reconciliation (`aws` or `azure`) |
+| `--days` | Number of days to reconcile (default: 7) |
+| `--cost-type` | Azure cost type: `amortized` or `actual` (default: amortized) |
+| `--data-delay` | Billing data delay in hours (default: 48; AWS CUR ~24h, Azure EA/MCA 8-24h, Azure PAYG up to 72h) |
 
-Cloud clusters use real pricing automatically. These flags are for on-premise clusters where pricing is not available from a cloud provider.
+Cloud clusters use real pricing automatically. On-prem pricing flags are for clusters where cloud pricing is not available.
 
 ## Development
 
@@ -261,4 +344,4 @@ make lint     # Run linter
 
 ## License
 
-Apache 2.0 — See [LICENSE](LICENSE) for details.
+Apache 2.0. See [LICENSE](LICENSE) for details.

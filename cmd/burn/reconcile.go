@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -45,7 +46,7 @@ func init() {
 	f.StringVar(&curDatabase, "cur-database", "", "Athena database for CUR (or CUR_DATABASE env)")
 	f.StringVar(&curTable, "cur-table", "", "Athena table for CUR (or CUR_TABLE env)")
 	f.StringVar(&curOutputLoc, "cur-output", "", "S3 output for Athena results (or CUR_OUTPUT_LOCATION env)")
-	f.StringVar(&curWorkgroup, "cur-workgroup", "primary", "Athena workgroup (or CUR_WORKGROUP env)")
+	f.StringVar(&curWorkgroup, "cur-workgroup", "", "Athena workgroup (or CUR_WORKGROUP env, default: primary)")
 	f.StringVar(&curRegion, "cur-region", "", "AWS region for Athena (or CUR_REGION env)")
 	f.IntVar(&curDays, "days", 7, "number of days to reconcile")
 	f.StringVar(&kubeconfig, "kubeconfig", "", "path to kubeconfig file")
@@ -85,6 +86,9 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 	}
 	if v := os.Getenv("CUR_WORKGROUP"); v != "" && curWorkgroup == "" {
 		curWorkgroup = v
+	}
+	if curWorkgroup == "" {
+		curWorkgroup = "primary"
 	}
 	if v := os.Getenv("CUR_REGION"); v != "" && curRegion == "" {
 		curRegion = v
@@ -141,18 +145,7 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "Querying Azure Cost Management (%s to %s)...\n",
 			start.Format("Jan 2"), end.Format("Jan 2, 2006"))
-		estimatedCosts := make(map[string]float64)
-		for _, n := range report.Nodes {
-			estimatedCosts[n.Name] = n.MonthlyPrice
-		}
-		pvEstimates := make(map[string]float64)
-		for _, pv := range report.PVCosts {
-			pvEstimates[pv.Namespace+"/"+pv.Name] = pv.MonthlyCost
-		}
-		lbEstimates := make(map[string]float64)
-		for _, lb := range report.LBCosts {
-			lbEstimates[lb.Namespace+"/"+lb.Name] = lb.MonthlyCost
-		}
+		estimatedCosts, pvEstimates, lbEstimates := billing.BuildEstimateMaps(report)
 		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, float64(curDays))
 		if err != nil {
 			return err
@@ -179,14 +172,7 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Enrich coverage gaps with real RI pricing from cloud APIs
-	for i := range result.CoverageGaps {
-		gap := &result.CoverageGaps[i]
-		saving, pct, ok := pp.GetRISaving(ctx, gap.InstanceType, gap.Region)
-		if ok {
-			gap.PotentialSaving = saving
-			gap.Recommendation = fmt.Sprintf("$%.0f/mo (%.0f%% off) with 1yr Reserved Instance", saving, pct)
-		}
-	}
+	billing.EnrichCoverageGaps(ctx, result.CoverageGaps, pp)
 
 	switch reconcileOut {
 	case "json":
@@ -221,9 +207,25 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 		fmt.Println()
+		fmt.Println("\nAnalysis based on cluster data and actual billing.")
 	}
 
 	return nil
+}
+
+func fmtDiff(estimated, actual float64) string {
+	diff := actual - estimated
+	if math.Abs(diff) < 0.005 {
+		return ""
+	}
+	if estimated == 0 || actual == 0 {
+		return fmt.Sprintf("$%+.2f", diff)
+	}
+	pct := diff / estimated * 100
+	if math.Round(pct) == 0 {
+		return fmt.Sprintf("$%+.2f", diff)
+	}
+	return fmt.Sprintf("$%+.2f (%+.0f%%)", diff, pct)
 }
 
 func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
@@ -247,10 +249,7 @@ func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tTYPE\tPRICING\tEST/MO\tCOMPUTE\tTRANSFER\tACTUAL/MO\tDIFF")
 	for _, n := range r.Nodes {
-		diff := ""
-		if n.ActualCost > 0 {
-			diff = fmt.Sprintf("%+.0f%%", n.DifferencePercent)
-		}
+		diff := fmtDiff(n.EstimatedMonthlyCost, n.ActualCost)
 		transfer := ""
 		if n.ActualTransferCost > 0.01 {
 			transfer = fmt.Sprintf("$%.2f", n.ActualTransferCost)
@@ -299,10 +298,7 @@ func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "DISK\tTYPE\tEST/MO\tACTUAL/MO\tDIFF")
 		for _, d := range r.Disks {
-			diff := ""
-			if d.EstimatedCost > 0 {
-				diff = fmt.Sprintf("%+.0f%%", d.DiffPercent)
-			}
+			diff := fmtDiff(d.EstimatedCost, d.ActualCost)
 			label := d.PVCNamespace + "/" + d.PVCName
 			if d.MatchMethod == "os-disk" {
 				label = d.PVCName // "(OS disk)"
@@ -324,10 +320,7 @@ func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tSERVICE\tEST/MO\tACTUAL/MO\tDIFF")
 		for _, lb := range r.LoadBalancers {
-			diff := ""
-			if lb.EstimatedCost > 0 {
-				diff = fmt.Sprintf("%+.0f%%", lb.DiffPercent)
-			}
+			diff := fmtDiff(lb.EstimatedCost, lb.ActualCost)
 			svc := lb.ServiceNamespace + "/" + lb.ServiceName
 			if lb.IsOrphaned {
 				svc = "(orphaned)"
@@ -356,10 +349,7 @@ func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAMESPACE\tEST/MO\tACTUAL/MO\tDIFF")
 		for _, ns := range r.Namespaces {
-			diff := ""
-			if ns.ActualCost > 0 {
-				diff = fmt.Sprintf("%+.0f%%", ns.DiffPercent)
-			}
+			diff := fmtDiff(ns.EstimatedCost, ns.ActualCost)
 			fmt.Fprintf(w, "%s\t$%.2f\t$%.2f\t%s\n",
 				ofmt.Truncate(ns.Name, 25),
 				ns.EstimatedCost,
@@ -414,6 +404,9 @@ func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 		if r.InfraCost.PublicIPActual > 0 {
 			fmt.Printf("Public IPs:       %-13s $%.2f\n", "—", r.InfraCost.PublicIPActual)
 		}
+		if r.InfraCost.UnmatchedCompute > 0.005 {
+			fmt.Printf("Unreconciled:     %-13s $%.2f\n", "—", r.InfraCost.UnmatchedCompute)
+		}
 		if r.InfraCost.ManagementFee > 0 {
 			fmt.Printf("Management Fee:   %-13s $%.2f\n", "—", r.InfraCost.ManagementFee)
 		}
@@ -452,21 +445,9 @@ func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 		}
 	}
 
-	if r.UnmatchedNodes > 0 || r.UnmatchedCURItems > 0 || r.DaysFailed > 0 {
-		fmt.Print("\nDiagnostics:")
-		if r.DaysFailed > 0 {
-			fmt.Printf(" %d/%d days queried (%d failed)", r.DaysQueried, r.DaysQueried+r.DaysFailed, r.DaysFailed)
-		}
-		if r.UnmatchedNodes > 0 || r.UnmatchedCURItems > 0 {
-			fmt.Printf(" %d unmatched nodes, %d unmatched CUR items", r.UnmatchedNodes, r.UnmatchedCURItems)
-		}
-		fmt.Println()
-	}
-
-	if r.DataScannedBytes > 0 {
-		mb := float64(r.DataScannedBytes) / (1024 * 1024)
-		cost := float64(r.DataScannedBytes) / (1024 * 1024 * 1024 * 1024) * 5.0
-		fmt.Printf("Athena: %.1f MB scanned (~$%.4f)\n", mb, cost)
+	if r.DaysFailed > 0 {
+		fmt.Printf("\nWarning: %d/%d days queried (%d failed) — results may be incomplete\n",
+			r.DaysQueried, r.DaysQueried+r.DaysFailed, r.DaysFailed)
 	}
 }
 

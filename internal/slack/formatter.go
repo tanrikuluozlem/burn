@@ -9,16 +9,7 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/output"
 )
 
-// FormatOptions configures report formatting
-type FormatOptions struct {
-	ShowAllPods bool
-}
-
 func FormatCostReport(report *analyzer.CostReport) *Message {
-	return FormatCostReportWithOptions(report, FormatOptions{})
-}
-
-func FormatCostReportWithOptions(report *analyzer.CostReport, opts FormatOptions) *Message {
 	idlePercent := 0.0
 	if report.MonthlyCost > 0 {
 		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100

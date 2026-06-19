@@ -83,7 +83,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid period %q: use Prometheus duration format (e.g. 1h, 7d, 30d)", period)
 	}
 
-	if p := os.Getenv("PROMETHEUS_URL"); p != "" {
+	if p := os.Getenv("PROMETHEUS_URL"); p != "" && prometheusURL == "" {
 		prometheusURL = p
 	}
 
@@ -134,32 +134,30 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 	}
 	report.Period = coll.Period()
 
-	// When --ai + --namespace: show namespace pods, AI gets full cluster
-	if withAI && namespace != "" {
-		var nsPods []analyzer.PodEfficiency
-		for _, p := range report.AllPods {
-			if p.Namespace == namespace {
-				nsPods = append(nsPods, p)
-			}
-		}
-		if len(nsPods) > 0 {
-			var nsPVCs []analyzer.PVCost
-			var nsPVCost float64
-			for _, pv := range report.PVCosts {
-				if pv.Namespace == namespace {
-					nsPVCs = append(nsPVCs, pv)
-					nsPVCost += pv.MonthlyCost
-				}
-			}
-			outputNamespacePods(nsPods, report.MetricsSource == "prometheus", nsPVCs, nsPVCost)
-		}
-	}
-
 	switch output {
 	case "json":
 		return outputJSON(report)
 	default:
-		if !(withAI && namespace != "") {
+		// When --ai + --namespace: show namespace pods, AI gets full cluster
+		if withAI && namespace != "" {
+			var nsPods []analyzer.PodEfficiency
+			for _, p := range report.AllPods {
+				if p.Namespace == namespace {
+					nsPods = append(nsPods, p)
+				}
+			}
+			if len(nsPods) > 0 {
+				var nsPVCs []analyzer.PVCost
+				var nsPVCost float64
+				for _, pv := range report.PVCosts {
+					if pv.Namespace == namespace {
+						nsPVCs = append(nsPVCs, pv)
+						nsPVCost += pv.MonthlyCost
+					}
+				}
+				outputNamespacePods(nsPods, report.MetricsSource == "prometheus", nsPVCs, nsPVCost)
+			}
+		} else {
 			outputTable(report)
 		}
 	}
@@ -215,8 +213,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		}
 
 		sc := slack.NewWebhookClient(webhook)
-		opts := slack.FormatOptions{ShowAllPods: showAllPods}
-		if err := sc.Send(ctx, slack.FormatCostReportWithOptions(report, opts)); err != nil {
+		if err := sc.Send(ctx, slack.FormatCostReport(report)); err != nil {
 			return fmt.Errorf("failed to send cost report to Slack: %w", err)
 		}
 		// Send AI report only if we have one

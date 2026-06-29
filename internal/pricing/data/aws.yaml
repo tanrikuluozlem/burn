@@ -1,6 +1,6 @@
 # AWS EC2 Instance Pricing (Linux, On-Demand)
 # Source: https://aws.amazon.com/ec2/pricing/on-demand/
-# Auto-generated: 2026-06-22
+# Auto-generated: 2026-06-29
 # DO NOT EDIT MANUALLY - run 'go run scripts/update-pricing.go aws'
 
 ap-northeast-1:
@@ -59,7 +59,6 @@ ap-northeast-2:
     m5a.2xlarge: 0.424
     m5a.large: 0.106
     m5a.xlarge: 0.212
-    m5.2xlarge: 0.472
     m5.4xlarge: 0.944
     m5.large: 0.118
     m5.xlarge: 0.236
@@ -106,6 +105,7 @@ ap-south-1:
     m5.large: 0.101
     m5.xlarge: 0.202
     m6i.2xlarge: 0.404
+    m6i.large: 0.101
     m6i.xlarge: 0.202
     r5a.large: 0.072
     r5a.xlarge: 0.143
@@ -177,6 +177,7 @@ ap-southeast-2:
     c5.2xlarge: 0.444
     c5.4xlarge: 0.888
     c5.large: 0.111
+    c5.xlarge: 0.222
     c6i.2xlarge: 0.444
     c6i.large: 0.111
     c6i.xlarge: 0.222
@@ -188,7 +189,6 @@ ap-southeast-2:
     m5.large: 0.12
     m5.xlarge: 0.24
     m6i.2xlarge: 0.48
-    m6i.large: 0.12
     m6i.xlarge: 0.24
     r5a.large: 0.136
     r5a.xlarge: 0.272
@@ -254,7 +254,6 @@ ca-central-1:
     t3.xlarge: 0.1856
 
 eu-central-1:
-    c5a.2xlarge: 0.348
     c5a.large: 0.087
     c5a.xlarge: 0.174
     c5.2xlarge: 0.388
@@ -353,7 +352,6 @@ eu-west-1:
     r5.large: 0.141
     r5.xlarge: 0.282
     r6i.large: 0.141
-    r6i.xlarge: 0.282
     t3a.large: 0.0816
     t3a.medium: 0.0408
     t3a.micro: 0.0102
@@ -377,7 +375,6 @@ eu-west-2:
     c5.large: 0.101
     c5.xlarge: 0.202
     c6i.2xlarge: 0.404
-    c6i.large: 0.101
     c6i.xlarge: 0.202
     m5a.2xlarge: 0.4
     m5a.large: 0.1
@@ -433,7 +430,6 @@ sa-east-1:
     m6i.xlarge: 0.306
     r5a.large: 0.181
     r5a.xlarge: 0.362
-    r5.2xlarge: 0.804
     r5.large: 0.201
     r5.xlarge: 0.402
     r6i.large: 0.201

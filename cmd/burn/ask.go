@@ -77,7 +77,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	fmt.Println("Collecting cluster data...")
+	fmt.Fprintln(os.Stderr, "Collecting cluster data...")
 
 	coll, err := collector.New(kubeconfig, kubecontext, namespace, prometheusURL, period)
 	if err != nil {
@@ -156,7 +156,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Println("Thinking...")
+	fmt.Fprintln(os.Stderr, "Thinking...")
 
 	answer, err := advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
 		fmt.Print(text)
@@ -165,7 +165,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println()
-	fmt.Println("\nAnalysis based on cluster data. Run burn reconcile to verify.")
+	fmt.Fprintln(os.Stderr, "\nAnalysis based on cluster data. Run burn reconcile to verify.")
 
 	if askSlack {
 		webhook := askSlackWebhook
@@ -181,7 +181,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		if err := sc.Send(ctx, msg); err != nil {
 			return fmt.Errorf("failed to send to Slack: %w", err)
 		}
-		fmt.Println("\n✓ Answer sent to Slack")
+		fmt.Fprintln(os.Stderr, "\n✓ Answer sent to Slack")
 	}
 
 	return nil

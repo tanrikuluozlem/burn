@@ -35,7 +35,6 @@ var (
 	verbose       bool
 	sendToSlack   bool
 	slackWebhook  string
-	showAllPods   bool
 	period        string
 	cpuPrice      float64
 	ramPrice      float64
@@ -61,7 +60,6 @@ func init() {
 	f.BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	f.BoolVar(&sendToSlack, "slack", false, "send report to Slack")
 	f.StringVar(&slackWebhook, "slack-webhook", "", "Slack webhook URL (or set SLACK_WEBHOOK_URL)")
-	f.BoolVar(&showAllPods, "all", false, "show all pods (default: top 5 wasteful)")
 	f.StringVar(&period, "period", "", "analysis period (e.g. 1h, 7d, 30d)")
 	f.Float64Var(&cpuPrice, "cpu-price", 0, "custom CPU price per core per hour (on-prem)")
 	f.Float64Var(&ramPrice, "ram-price", 0, "custom RAM price per GiB per hour (on-prem)")
@@ -175,13 +173,13 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 			}
 		}
 		if hasOnPrem {
-			fmt.Println("\nℹ On-prem nodes detected. For accurate costs, set your rates:")
-			fmt.Println("  --cpu-price <$/core/hr> --ram-price <$/GiB/hr>")
-			fmt.Println("  Without custom pricing, cloud-equivalent rates are used.")
+			fmt.Fprintln(os.Stderr, "\nℹ On-prem nodes detected. For accurate costs, set your rates:")
+			fmt.Fprintln(os.Stderr, "  --cpu-price <$/core/hr> --ram-price <$/GiB/hr>")
+			fmt.Fprintln(os.Stderr, "  Without custom pricing, cloud-equivalent rates are used.")
 		}
 		if hasGPU {
-			fmt.Println("\nℹ GPU detected but price unknown. GPU cost excluded.")
-			fmt.Println("  Set GPU price: --gpu-price <$/GPU/hr>")
+			fmt.Fprintln(os.Stderr, "\nℹ GPU detected but price unknown. GPU cost excluded.")
+			fmt.Fprintln(os.Stderr, "  Set GPU price: --gpu-price <$/GPU/hr>")
 		}
 	}
 
@@ -193,7 +191,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("ANTHROPIC_API_KEY not set")
 		}
 
-		fmt.Println("\nfetching recommendations...")
+		fmt.Fprintln(os.Stderr, "\nfetching recommendations...")
 		var err error
 		aiReport, err = advisor.New(apiKey).Analyze(ctx, report, namespace)
 		if err != nil {
@@ -222,7 +220,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 				return fmt.Errorf("failed to send AI report to Slack: %w", err)
 			}
 		}
-		fmt.Println("\n✓ Report sent to Slack")
+		fmt.Fprintln(os.Stderr, "\n✓ Report sent to Slack")
 	}
 
 	return nil

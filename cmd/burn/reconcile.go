@@ -199,7 +199,7 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		}
 		question := fmt.Sprintf("Analyze this %s reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s", source, string(resultJSON))
 
-		fmt.Println("\nfetching AI analysis...")
+		fmt.Fprintln(os.Stderr, "\nfetching AI analysis...")
 		_, err = advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
 			fmt.Print(text)
 		})

@@ -4,10 +4,6 @@ import "time"
 
 type Category string
 
-const (
-	CategoryCost Category = "cost"
-)
-
 type Severity string
 
 const (

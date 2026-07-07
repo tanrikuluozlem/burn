@@ -443,7 +443,7 @@ func ebsUsageType(volumeType, region string) string {
 
 	volMap := map[string]string{
 		"gp2": "EBS:VolumeUsage.gp2", "gp3": "EBS:VolumeUsage.gp3",
-		"io1": "EBS:VolumeUsage.piops", "io2": "EBS:VolumeUsage.gp3.piops",
+		"io1": "EBS:VolumeUsage.piops", "io2": "EBS:VolumeUsage.io2",
 		"st1": "EBS:VolumeUsage.st1", "sc1": "EBS:VolumeUsage.sc1",
 	}
 

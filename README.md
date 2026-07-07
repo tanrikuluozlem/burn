@@ -339,7 +339,6 @@ Cloud clusters use real pricing automatically. On-prem pricing flags are for clu
 ```bash
 make build    # Build binary
 make test     # Run tests
-make lint     # Run linter
 ```
 
 ## License

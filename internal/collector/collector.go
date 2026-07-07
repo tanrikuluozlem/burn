@@ -228,28 +228,26 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	var pvcInfos []PVCInfo
-	if pvcs != nil {
-		for _, pvc := range pvcs {
-			if pvc.Status.Phase != corev1.ClaimBound {
-				continue
-			}
-			var reqBytes int64
-			if storage, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
-				reqBytes = storage.Value()
-			}
-			sc := ""
-			if pvc.Spec.StorageClassName != nil {
-				sc = *pvc.Spec.StorageClassName
-			}
-			pvcInfos = append(pvcInfos, PVCInfo{
-				Name:           pvc.Name,
-				Namespace:      pvc.Namespace,
-				StorageClass:   sc,
-				RequestedBytes: reqBytes,
-				VolumeName:     pvc.Spec.VolumeName,
-				CloudDiskID:    pvDiskIDs[pvc.Spec.VolumeName],
-			})
+	for _, pvc := range pvcs {
+		if pvc.Status.Phase != corev1.ClaimBound {
+			continue
 		}
+		var reqBytes int64
+		if storage, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+			reqBytes = storage.Value()
+		}
+		sc := ""
+		if pvc.Spec.StorageClassName != nil {
+			sc = *pvc.Spec.StorageClassName
+		}
+		pvcInfos = append(pvcInfos, PVCInfo{
+			Name:           pvc.Name,
+			Namespace:      pvc.Namespace,
+			StorageClass:   sc,
+			RequestedBytes: reqBytes,
+			VolumeName:     pvc.Spec.VolumeName,
+			CloudDiskID:    pvDiskIDs[pvc.Spec.VolumeName],
+		})
 	}
 
 	// Collect LoadBalancer services
@@ -258,22 +256,20 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		log.Printf("warning: failed to list services: %v", err)
 	}
 	var lbInfos []LBServiceInfo
-	if services != nil {
-		for _, svc := range services {
-			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
-				hostname := ""
-				if len(svc.Status.LoadBalancer.Ingress) > 0 {
-					hostname = svc.Status.LoadBalancer.Ingress[0].Hostname
-					if hostname == "" {
-						hostname = svc.Status.LoadBalancer.Ingress[0].IP
-					}
+	for _, svc := range services {
+		if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+			hostname := ""
+			if len(svc.Status.LoadBalancer.Ingress) > 0 {
+				hostname = svc.Status.LoadBalancer.Ingress[0].Hostname
+				if hostname == "" {
+					hostname = svc.Status.LoadBalancer.Ingress[0].IP
 				}
-				lbInfos = append(lbInfos, LBServiceInfo{
-					Name:      svc.Name,
-					Namespace: svc.Namespace,
-					Hostname:  hostname,
-				})
 			}
+			lbInfos = append(lbInfos, LBServiceInfo{
+				Name:      svc.Name,
+				Namespace: svc.Namespace,
+				Hostname:  hostname,
+			})
 		}
 	}
 
@@ -283,22 +279,20 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		log.Printf("warning: failed to list ingresses: %v", err)
 	}
 	seenLBs := make(map[string]bool)
-	if ingresses != nil {
-		for _, ing := range ingresses {
-			for _, lb := range ing.Status.LoadBalancer.Ingress {
-				host := lb.Hostname
-				if host == "" {
-					host = lb.IP
-				}
-				if host == "" || seenLBs[host] {
-					continue
-				}
-				seenLBs[host] = true
-				lbInfos = append(lbInfos, LBServiceInfo{
-					Name:      ing.Name,
-					Namespace: ing.Namespace,
-				})
+	for _, ing := range ingresses {
+		for _, lb := range ing.Status.LoadBalancer.Ingress {
+			host := lb.Hostname
+			if host == "" {
+				host = lb.IP
 			}
+			if host == "" || seenLBs[host] {
+				continue
+			}
+			seenLBs[host] = true
+			lbInfos = append(lbInfos, LBServiceInfo{
+				Name:      ing.Name,
+				Namespace: ing.Namespace,
+			})
 		}
 	}
 
@@ -545,8 +539,9 @@ func isSpotInstance(labels map[string]string) bool {
 	if labels["karpenter.sh/capacity-type"] == "spot" {
 		return true
 	}
-	// GCP/GKE preemptible
-	if labels["cloud.google.com/gke-preemptible"] == "true" {
+	// GCP/GKE preemptible or spot
+	if labels["cloud.google.com/gke-preemptible"] == "true" ||
+		labels["cloud.google.com/gke-spot"] == "true" {
 		return true
 	}
 	// Azure/AKS spot

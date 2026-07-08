@@ -270,7 +270,7 @@ Add to `~/.cursor/mcp.json`:
 }
 ```
 
-CUR environment variables are optional — needed only for `reconcile`. Without them, `analyze` and `spot_readiness` work out of the box.
+CUR environment variables are optional, only needed for `reconcile`. Without them, `analyze` and `spot_readiness` work out of the box.
 
 ## On-prem and GPU clusters
 

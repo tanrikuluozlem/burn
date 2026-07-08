@@ -292,6 +292,7 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 			lbInfos = append(lbInfos, LBServiceInfo{
 				Name:      ing.Name,
 				Namespace: ing.Namespace,
+				Hostname:  host,
 			})
 		}
 	}

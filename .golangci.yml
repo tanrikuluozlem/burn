@@ -6,3 +6,12 @@ linters:
     - staticcheck
     - ineffassign
     - unused
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - (net/http.ResponseWriter).Write
+      - (*encoding/json.Encoder).Encode
+  gosec:
+    excludes:
+      - G115

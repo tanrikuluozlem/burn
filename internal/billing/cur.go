@@ -361,6 +361,15 @@ func MatchLBsToServices(
 		} else if s, ok := svcByName[strings.ToLower(lbID)]; ok {
 			svc = &s
 			method = "name"
+		} else if lbName := extractLBNameFromARN(lbID); lbName != "" {
+			for _, s := range services {
+				if s.Hostname != "" && strings.Contains(s.Hostname, lbName) {
+					e := svcEntry{info: s, estimate: lbEstimates[s.Namespace+"/"+s.Name]}
+					svc = &e
+					method = "arn"
+					break
+				}
+			}
 		} else if strings.ToLower(lbID) == "kubernetes" && len(services) > 0 {
 			splitCost := monthly / float64(len(services))
 			for _, s := range services {
@@ -411,6 +420,20 @@ func MatchLBsToServices(
 		}
 	}
 	return matched, orphaned
+}
+
+func extractLBNameFromARN(arn string) string {
+	if !strings.HasPrefix(arn, "arn:aws:elasticloadbalancing") {
+		return ""
+	}
+	parts := strings.Split(arn, "/")
+	if len(parts) >= 3 {
+		return parts[len(parts)-2]
+	}
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return ""
 }
 
 const (

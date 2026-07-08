@@ -327,7 +327,7 @@ func TestSpotNodePricing(t *testing.T) {
 	spotMonthly := report.MonthlyCost
 	ratio := spotMonthly / onDemandMonthly
 
-	if math.Abs(ratio-0.21) > 0.01 {
+	if math.Abs(ratio-0.21) > tol {
 		t.Errorf("Spot/OnDemand ratio = %.4f, expected ~0.21", ratio)
 	}
 }

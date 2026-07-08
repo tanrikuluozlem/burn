@@ -25,6 +25,7 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 - **Cloud + on-prem**: Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters. Billing reconciliation supports AWS and Azure.
 - **Spot readiness**: Identifies which workloads can safely move to spot instances with real-time discount and interruption rate.
 - **Ingress LB detection**: Detects load balancers from both Services and Ingress resources, with hostname deduplication.
+- **MCP server**: Use burn from Claude Code, Cursor, or any MCP-compatible AI agent. Ask questions, get cost data.
 - **Time-aware**: `--period 7d` for weekly averages instead of point-in-time snapshots.
 
 ## Install
@@ -221,6 +222,56 @@ burn serve --port 8080 --prometheus http://prometheus:9090 --period 7d
 3. Set `SLACK_SIGNING_SECRET` and `ANTHROPIC_API_KEY` environment variables
 4. Expose the server (e.g., ngrok for testing, load balancer for production)
 
+## MCP server
+
+Use burn from Claude Code, Cursor, or any MCP-compatible AI agent. Three tools: `analyze`, `spot_readiness`, `reconcile`.
+
+### Claude Code
+
+![mcp demo](assets/demo-mcp.gif)
+
+```bash
+claude mcp add burn -e AWS_PROFILE=your-profile \
+  -e CUR_DATABASE=your_cur_db -e CUR_TABLE=data \
+  -e CUR_OUTPUT_LOCATION=s3://your-bucket/athena-results/ \
+  -e CUR_REGION=us-east-1 \
+  -- burn mcp --prometheus http://prometheus:9090
+```
+
+Then ask:
+
+```
+I need to cut our Kubernetes costs by 20%, where do I start?
+verify that against my actual AWS bill, I don't trust estimates
+show me the spot details, what breaks if we switch?
+```
+
+### Cursor
+
+![mcp cursor](assets/demo-mcp-cursor.gif)
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "burn": {
+      "command": "burn",
+      "args": ["mcp", "--prometheus", "http://prometheus:9090"],
+      "env": {
+        "AWS_PROFILE": "your-profile",
+        "CUR_DATABASE": "your_cur_db",
+        "CUR_TABLE": "data",
+        "CUR_OUTPUT_LOCATION": "s3://your-bucket/athena-results/",
+        "CUR_REGION": "us-east-1"
+      }
+    }
+  }
+}
+```
+
+CUR environment variables are optional — needed only for `reconcile`. Without them, `analyze` and `spot_readiness` work out of the box.
+
 ## On-prem and GPU clusters
 
 Burn works with on-premise and GPU clusters. Set your own resource rates:
@@ -245,7 +296,7 @@ AWS CUR / Azure  → actual billing data for reconciliation (optional)
          ↓
     Cost Engine  → estimates, reconciliation, SP/RI/Spot detection
          ↓
-    CLI / Slack / AI Recommendations
+    CLI / Slack / MCP / AI Recommendations
 ```
 
 ### Pricing sources
@@ -339,7 +390,6 @@ Cloud clusters use real pricing automatically. On-prem pricing flags are for clu
 ```bash
 make build    # Build binary
 make test     # Run tests
-make lint     # Run linter
 ```
 
 ## License

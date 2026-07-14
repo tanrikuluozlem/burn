@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29
 	github.com/aws/aws-sdk-go-v2/service/athena v1.59.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.307.1
-	github.com/aws/aws-sdk-go-v2/service/pricing v1.42.7
+	github.com/aws/aws-sdk-go-v2/service/pricing v1.43.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.22.0

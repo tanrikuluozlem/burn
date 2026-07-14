@@ -35,7 +35,7 @@ func TestGetEmbeddedPrice_Azure(t *testing.T) {
 		wantPrice float64
 	}{
 		{"eastus", "Standard_D2s_v3", 0.096},
-		{"westeurope", "Standard_B2ms", 0.096},
+		{"westeurope", "Standard_B2s", 0.048},
 	}
 
 	for _, tt := range tests {

@@ -1,6 +1,6 @@
 # Azure VM Instance Pricing (Linux, On-Demand)
 # Source: https://azure.microsoft.com/pricing/details/virtual-machines/linux/
-# Auto-generated: 2026-07-06
+# Auto-generated: 2026-07-13
 # DO NOT EDIT MANUALLY - run 'go run scripts/update-pricing.go azure'
 
 australiaeast:
@@ -19,7 +19,6 @@ australiaeast:
     Standard_D4s_v3: 0.25
     Standard_D4s_v4: 0.24
     Standard_D4s_v5: 0.24
-    Standard_D8s_v3: 0.5
     Standard_D8s_v5: 0.48
     Standard_E2s_v3: 0.16
     Standard_E2s_v4: 0.151
@@ -36,7 +35,6 @@ eastus:
     Standard_B1ms: 0.0207
     Standard_B1s: 0.0104
     Standard_B2ms: 0.0832
-    Standard_B2s: 0.0416
     Standard_B4ms: 0.166
     Standard_D2as_v4: 0.096
     Standard_D2as_v5: 0.086
@@ -49,9 +47,7 @@ eastus:
     Standard_D4s_v4: 0.192
     Standard_D4s_v5: 0.192
     Standard_D8s_v3: 0.384
-    Standard_D8s_v5: 0.384
     Standard_E2s_v3: 0.126
-    Standard_E2s_v4: 0.126
     Standard_E2s_v5: 0.126
     Standard_E4s_v3: 0.252
     Standard_E4s_v4: 0.252
@@ -65,7 +61,6 @@ eastus2:
     Standard_B1ms: 0.0208
     Standard_B1s: 0.0104
     Standard_B2ms: 0.0832
-    Standard_B2s: 0.0416
     Standard_B4ms: 0.166
     Standard_D2as_v4: 0.096
     Standard_D2as_v5: 0.086
@@ -81,7 +76,6 @@ eastus2:
     Standard_D8s_v5: 0.384
     Standard_E2s_v3: 0.133
     Standard_E2s_v4: 0.126
-    Standard_E2s_v5: 0.126
     Standard_E4s_v3: 0.266
     Standard_E4s_v4: 0.252
     Standard_E4s_v5: 0.252
@@ -91,7 +85,6 @@ eastus2:
     Standard_F8s_v2: 0.338
 
 germanywestcentral:
-    Standard_B1ms: 0.024
     Standard_B1s: 0.012
     Standard_B2ms: 0.096
     Standard_B2s: 0.048
@@ -108,9 +101,7 @@ germanywestcentral:
     Standard_D4s_v5: 0.23
     Standard_D8s_v3: 0.46
     Standard_D8s_v5: 0.46
-    Standard_E2s_v3: 0.152
     Standard_E2s_v4: 0.152
-    Standard_E2s_v5: 0.152
     Standard_E4s_v3: 0.304
     Standard_E4s_v4: 0.304
     Standard_E4s_v5: 0.304
@@ -124,10 +115,8 @@ japaneast:
     Standard_B1s: 0.0136
     Standard_B2ms: 0.109
     Standard_B2s: 0.0544
-    Standard_B4ms: 0.218
     Standard_D2as_v4: 0.124
     Standard_D2as_v5: 0.112
-    Standard_D2s_v3: 0.129
     Standard_D2s_v4: 0.124
     Standard_D2s_v5: 0.124
     Standard_D4as_v4: 0.248
@@ -152,13 +141,11 @@ northeurope:
     Standard_B1ms: 0.0227
     Standard_B1s: 0.0113
     Standard_B2ms: 0.091
-    Standard_B2s: 0.045
     Standard_B4ms: 0.182
     Standard_D2as_v4: 0.107
     Standard_D2as_v5: 0.096
     Standard_D2s_v3: 0.107
     Standard_D2s_v4: 0.107
-    Standard_D2s_v5: 0.107
     Standard_D4as_v4: 0.214
     Standard_D4as_v5: 0.376
     Standard_D4s_v3: 0.214
@@ -167,7 +154,6 @@ northeurope:
     Standard_D8s_v3: 0.428
     Standard_D8s_v5: 0.428
     Standard_E2s_v3: 0.141
-    Standard_E2s_v4: 0.141
     Standard_E2s_v5: 0.141
     Standard_E4s_v3: 0.282
     Standard_E4s_v4: 0.282
@@ -185,7 +171,6 @@ southeastasia:
     Standard_B4ms: 0.211
     Standard_D2as_v4: 0.12
     Standard_D2as_v5: 0.2
-    Standard_D2s_v3: 0.125
     Standard_D2s_v4: 0.12
     Standard_D2s_v5: 0.12
     Standard_D4as_v4: 0.24
@@ -196,7 +181,6 @@ southeastasia:
     Standard_D8s_v3: 0.5
     Standard_D8s_v5: 0.48
     Standard_E2s_v3: 0.16
-    Standard_E2s_v4: 0.152
     Standard_E2s_v5: 0.152
     Standard_E4s_v3: 0.32
     Standard_E4s_v4: 0.304
@@ -214,7 +198,6 @@ uksouth:
     Standard_B4ms: 0.189
     Standard_D2as_v4: 0.111
     Standard_D2as_v5: 0.192
-    Standard_D2s_v3: 0.116
     Standard_D2s_v4: 0.111
     Standard_D2s_v5: 0.111
     Standard_D4as_v4: 0.222
@@ -238,14 +221,11 @@ uksouth:
 westeurope:
     Standard_B1ms: 0.024
     Standard_B1s: 0.012
-    Standard_B2ms: 0.096
     Standard_B2s: 0.048
     Standard_B4ms: 0.192
     Standard_D2as_v4: 0.115
     Standard_D2as_v5: 0.196
     Standard_D2s_v3: 0.12
-    Standard_D2s_v4: 0.115
-    Standard_D2s_v5: 0.115
     Standard_D4as_v4: 0.23
     Standard_D4as_v5: 0.392
     Standard_D4s_v3: 0.24
@@ -259,8 +239,6 @@ westeurope:
     Standard_E4s_v3: 0.32
     Standard_E4s_v4: 0.304
     Standard_E4s_v5: 0.304
-    Standard_E8s_v3: 0.64
-    Standard_F2s_v2: 0.097
     Standard_F4s_v2: 0.194
     Standard_F8s_v2: 0.388
 
@@ -270,7 +248,6 @@ westus:
     Standard_B2ms: 0.0992
     Standard_B2s: 0.0496
     Standard_B4ms: 0.198
-    Standard_D2as_v4: 0.112
     Standard_D2as_v5: 0.193
     Standard_D2s_v3: 0.117
     Standard_D2s_v4: 0.112
@@ -283,14 +260,11 @@ westus:
     Standard_D8s_v3: 0.468
     Standard_D8s_v5: 0.448
     Standard_E2s_v3: 0.148
-    Standard_E2s_v4: 0.14
     Standard_E2s_v5: 0.14
     Standard_E4s_v3: 0.296
     Standard_E4s_v4: 0.28
     Standard_E4s_v5: 0.28
     Standard_E8s_v3: 0.56
-    Standard_F2s_v2: 0.106
-    Standard_F4s_v2: 0.212
     Standard_F8s_v2: 0.424
 
 westus2:

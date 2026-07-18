@@ -304,7 +304,7 @@ AWS CUR / Azure  → actual billing data for reconciliation (optional)
 | Priority | Source | When |
 |----------|--------|------|
 | 1 | AWS/Azure pricing API | Real-time, region-aware when credentials available |
-| 2 | Embedded pricing DB | 600+ AWS, 300+ Azure instances, updated weekly via CI |
+| 2 | Embedded pricing DB | AWS, Azure, and GCP instances, updated weekly via CI |
 | 3 | Static fallback | Estimates based on instance family for unknown types |
 
 Storage and load balancer costs are fetched from cloud APIs when available, with static fallbacks. Usage-based charges (data processing, LCU) depend on traffic volume and are not included. GPU nodes are detected automatically and priced via ratio-based cost splitting.

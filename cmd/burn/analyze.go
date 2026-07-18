@@ -81,6 +81,10 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid period %q: use Prometheus duration format (e.g. 1h, 7d, 30d)", period)
 	}
 
+	if withAI && period == "" {
+		fmt.Fprintln(os.Stderr, "Note: --ai without --period uses instant metrics. Add --period 7d for P95-based recommendations.")
+	}
+
 	if p := os.Getenv("PROMETHEUS_URL"); p != "" && prometheusURL == "" {
 		prometheusURL = p
 	}

@@ -188,32 +188,35 @@ func runAsk(cmd *cobra.Command, args []string) error {
 }
 
 func formatAskSlackMessage(question, answer string) *slack.Message {
-	return &slack.Message{
-		Blocks: []slack.Block{
-			{
-				Type: "header",
-				Text: &slack.TextObject{
-					Type: "plain_text",
-					Text: "Burn AI Assistant",
-				},
-			},
-			{
-				Type: "section",
-				Text: &slack.TextObject{
-					Type: "mrkdwn",
-					Text: fmt.Sprintf("*Question:* %s", question),
-				},
-			},
-			{
-				Type: "divider",
-			},
-			{
-				Type: "section",
-				Text: &slack.TextObject{
-					Type: "mrkdwn",
-					Text: answer,
-				},
+	blocks := []slack.Block{
+		{
+			Type: "header",
+			Text: &slack.TextObject{
+				Type: "plain_text",
+				Text: "Burn AI Assistant",
 			},
 		},
+		{
+			Type: "section",
+			Text: &slack.TextObject{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*Question:* %s", question),
+			},
+		},
+		{
+			Type: "divider",
+		},
 	}
+
+	for _, chunk := range slack.SplitText(answer) {
+		blocks = append(blocks, slack.Block{
+			Type: "section",
+			Text: &slack.TextObject{
+				Type: "mrkdwn",
+				Text: chunk,
+			},
+		})
+	}
+
+	return &slack.Message{Blocks: blocks}
 }

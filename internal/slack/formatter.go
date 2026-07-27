@@ -3,11 +3,14 @@ package slack
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 	"github.com/tanrikuluozlem/burn/internal/output"
 )
+
+const maxBlockText = 2900
 
 func FormatCostReport(report *analyzer.CostReport) *Message {
 	idlePercent := 0.0
@@ -49,13 +52,7 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 				output.Truncate(n.Name, 35), n.InstanceType, spot, n.MonthlyPrice, n.IdlePercent*100))
 		}
 
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: "*Nodes:*\n" + strings.Join(nodeLines, "\n"),
-			},
-		})
+		blocks = append(blocks, splitSectionBlocks("*Nodes:*\n"+strings.Join(nodeLines, "\n"))...)
 	}
 
 	hasPrometheus := report.MetricsSource == "prometheus"
@@ -77,13 +74,7 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 			nsLines = append(nsLines, fmt.Sprintf("• _Idle (unallocated)_ — $%.2f/mo", report.TotalIdleCost))
 		}
 		nsLines = append(nsLines, fmt.Sprintf("*Total: $%.2f/mo*", report.MonthlyCost))
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: "*Cost by Namespace:*\n" + strings.Join(nsLines, "\n"),
-			},
-		})
+		blocks = append(blocks, splitSectionBlocks("*Cost by Namespace:*\n"+strings.Join(nsLines, "\n"))...)
 	} else if !hasPrometheus {
 		blocks = append(blocks, Block{
 			Type: "section",
@@ -101,13 +92,7 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 			pvLines = append(pvLines, fmt.Sprintf("• `%s` (%s) — %s %.0fGi — $%.2f/mo",
 				pv.Name, pv.Namespace, pv.StorageClass, pv.CapacityGiB, pv.MonthlyCost))
 		}
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: "*Storage:*\n" + strings.Join(pvLines, "\n"),
-			},
-		})
+		blocks = append(blocks, splitSectionBlocks("*Storage:*\n"+strings.Join(pvLines, "\n"))...)
 	}
 
 	// LB costs
@@ -116,13 +101,7 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 		for _, lb := range report.LBCosts {
 			lbLines = append(lbLines, fmt.Sprintf("• `%s` (%s) — $%.2f/mo", lb.Name, lb.Namespace, lb.MonthlyCost))
 		}
-		blocks = append(blocks, Block{
-			Type: "section",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: "*Load Balancers:*\n" + strings.Join(lbLines, "\n"),
-			},
-		})
+		blocks = append(blocks, splitSectionBlocks("*Load Balancers:*\n"+strings.Join(lbLines, "\n"))...)
 	}
 
 	// Spot readiness summary
@@ -192,14 +171,8 @@ func FormatAIReport(report *advisor.Report) *Message {
 				Text: "Recommendations",
 			},
 		},
-		{
-			Type: "section",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: report.Summary,
-			},
-		},
 	}
+	blocks = append(blocks, splitSectionBlocks(report.Summary)...)
 
 	for i, rec := range report.Recommendations {
 		severity := severityEmoji(rec.Severity)
@@ -244,6 +217,46 @@ func severityEmoji(severity advisor.Severity) string {
 	default:
 		return ":white_circle:"
 	}
+}
+
+func SplitText(text string) []string {
+	var chunks []string
+	remaining := text
+	for len(remaining) > 0 {
+		chunk := remaining
+		if len(chunk) > maxBlockText {
+			cut := strings.LastIndex(chunk[:maxBlockText], "\n")
+			if cut <= 0 {
+				cut = maxBlockText
+				for cut > 0 && !utf8.RuneStart(remaining[cut]) {
+					cut--
+				}
+				if cut == 0 {
+					cut = maxBlockText
+				}
+			}
+			chunk = remaining[:cut]
+			remaining = remaining[cut:]
+		} else {
+			remaining = ""
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks
+}
+
+func splitSectionBlocks(text string) []Block {
+	var blocks []Block
+	for _, chunk := range SplitText(text) {
+		blocks = append(blocks, Block{
+			Type: "section",
+			Text: &TextObject{
+				Type: "mrkdwn",
+				Text: chunk,
+			},
+		})
+	}
+	return blocks
 }
 
 func costReportHeader(period string) string {

@@ -95,6 +95,163 @@ func TestSeverityEmoji(t *testing.T) {
 	}
 }
 
+func TestSplitText_Short(t *testing.T) {
+	chunks := SplitText("short text")
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+	if chunks[0] != "short text" {
+		t.Errorf("unexpected text: %s", chunks[0])
+	}
+}
+
+func TestSplitText_Boundary(t *testing.T) {
+	line := strings.Repeat("x", 99) + "\n" // 100 char lines
+
+	for _, size := range []int{2899, 2900, 2901, 6000} {
+		var sb strings.Builder
+		for sb.Len() < size {
+			sb.WriteString(line)
+		}
+		input := sb.String()[:size]
+
+		chunks := SplitText(input)
+
+		if size <= 2900 && len(chunks) != 1 {
+			t.Errorf("size %d: expected 1 chunk, got %d", size, len(chunks))
+		}
+		if size > 2900 && len(chunks) < 2 {
+			t.Errorf("size %d: expected multiple chunks, got %d", size, len(chunks))
+		}
+
+		for i, c := range chunks {
+			if len(c) > 2900 {
+				t.Errorf("size %d: chunk %d exceeds 2900 bytes: %d", size, i, len(c))
+			}
+		}
+
+		recombined := strings.Join(chunks, "")
+		if recombined != input {
+			t.Errorf("size %d: recombined chunks do not match original", size)
+		}
+	}
+}
+
+func TestSplitText_UTF8Turkish(t *testing.T) {
+	// "ğüşıöç" = 12 bytes (6 two-byte runes)
+	line := strings.Repeat("ğüşıöç", 200) + "\n" // 2401 bytes per line
+	input := line + line                           // ~4802 bytes, forces split
+
+	chunks := SplitText(input)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+
+	var recombined strings.Builder
+	for _, c := range chunks {
+		if len(c) > 2900 {
+			t.Errorf("chunk exceeds 2900 bytes: %d", len(c))
+		}
+		recombined.WriteString(c)
+	}
+	if recombined.String() != input {
+		t.Error("recombined chunks do not match original")
+	}
+}
+
+func TestSplitText_Emoji(t *testing.T) {
+	// 🔥 = 4 bytes, no newlines — forces hard cut with multi-byte runes
+	input := strings.Repeat("🔥", 1000) // 4000 bytes
+	chunks := SplitText(input)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+
+	var recombined strings.Builder
+	for _, c := range chunks {
+		if len(c) > 2900 {
+			t.Errorf("chunk exceeds 2900 bytes: %d", len(c))
+		}
+		recombined.WriteString(c)
+	}
+	if recombined.String() != input {
+		t.Error("recombined chunks do not match original")
+	}
+}
+
+func TestSplitText_Empty(t *testing.T) {
+	chunks := SplitText("")
+	if len(chunks) != 0 {
+		t.Fatalf("expected 0 chunks for empty input, got %d", len(chunks))
+	}
+}
+
+func TestSplitSectionBlocks_WrapsCorrectly(t *testing.T) {
+	input := "short text"
+	blocks := splitSectionBlocks(input)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	if blocks[0].Type != "section" {
+		t.Errorf("expected section type, got %s", blocks[0].Type)
+	}
+	if blocks[0].Text.Type != "mrkdwn" {
+		t.Errorf("expected mrkdwn type, got %s", blocks[0].Text.Type)
+	}
+	if blocks[0].Text.Text != input {
+		t.Errorf("unexpected text: %s", blocks[0].Text.Text)
+	}
+}
+
+func TestFormatCostReport_ManyNodes(t *testing.T) {
+	nodes := make([]analyzer.NodeCost, 50)
+	for i := range nodes {
+		nodes[i] = analyzer.NodeCost{
+			Name:         strings.Repeat("x", 35),
+			InstanceType: "m5.2xlarge",
+			MonthlyPrice: 100,
+			IdlePercent:  0.30,
+		}
+	}
+	report := &analyzer.CostReport{
+		TotalNodes:  50,
+		TotalPods:   500,
+		MonthlyCost: 5000,
+		Nodes:       nodes,
+	}
+
+	msg := FormatCostReport(report)
+	for i, b := range msg.Blocks {
+		if b.Text != nil && len(b.Text.Text) > 2900 {
+			t.Errorf("block %d exceeds 2900 chars: %d", i, len(b.Text.Text))
+		}
+	}
+}
+
+func TestFormatAIReport_LongSummary(t *testing.T) {
+	var sb strings.Builder
+	line := strings.Repeat("analysis ", 11) + "\n" // ~100 chars per line
+	for sb.Len() < 4000 {
+		sb.WriteString(line)
+	}
+
+	report := &advisor.Report{
+		Summary:               sb.String(),
+		TotalPotentialSavings: 100.0,
+		Recommendations: []advisor.Recommendation{
+			{Title: "Test", Description: "desc", Severity: advisor.SeverityLow},
+		},
+	}
+
+	msg := FormatAIReport(report)
+	for i, b := range msg.Blocks {
+		if b.Text != nil && len(b.Text.Text) > 2900 {
+			t.Errorf("block %d exceeds 2900 chars: %d", i, len(b.Text.Text))
+		}
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	if output.Truncate("short", 10) != "short" {
 		t.Error("should not truncate short strings")

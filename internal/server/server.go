@@ -20,6 +20,7 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/collector"
 	"github.com/tanrikuluozlem/burn/internal/output"
 	"github.com/tanrikuluozlem/burn/internal/pricing"
+	"github.com/tanrikuluozlem/burn/internal/slack"
 )
 
 type Config struct {
@@ -612,23 +613,8 @@ func (s *Server) sendSlackResponse(responseURL, text string) {
 		return
 	}
 
-	// Slack section block text limit is 3000 chars.
-	// Split long messages into multiple blocks.
-	const maxBlockText = 2900
 	var blocks []map[string]any
-	for len(text) > 0 {
-		chunk := text
-		if len(chunk) > maxBlockText {
-			// Split at last newline before limit
-			cut := strings.LastIndex(chunk[:maxBlockText], "\n")
-			if cut <= 0 {
-				cut = maxBlockText
-			}
-			chunk = text[:cut]
-			text = text[cut:]
-		} else {
-			text = ""
-		}
+	for _, chunk := range slack.SplitText(text) {
 		blocks = append(blocks, map[string]any{
 			"type": "section",
 			"text": map[string]string{

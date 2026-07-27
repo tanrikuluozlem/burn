@@ -62,7 +62,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("SLACK_SIGNING_SECRET not set")
 	}
 
-	if p := os.Getenv("PROMETHEUS_URL"); p != "" {
+	if servePeriod != "" && !isValidPeriod(servePeriod) {
+		return fmt.Errorf("invalid period %q: use Prometheus duration format (e.g. 1h, 7d, 30d)", servePeriod)
+	}
+
+	if p := os.Getenv("PROMETHEUS_URL"); p != "" && servePrometheus == "" {
 		servePrometheus = p
 	}
 

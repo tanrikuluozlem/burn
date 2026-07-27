@@ -3,9 +3,13 @@ image:
   tag: v0.5.0
   pullPolicy: IfNotPresent
 
+rbac:
+  create: true
+
 serviceAccount:
   create: true
   name: ""
+  annotations: {}
 
 resources:
   requests:

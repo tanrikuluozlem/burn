@@ -315,10 +315,28 @@ Storage and load balancer costs are fetched from cloud APIs when available, with
 
 ```bash
 git clone https://github.com/tanrikuluozlem/burn.git
+
+# Create secrets
+kubectl create secret generic burn-secrets \
+  --from-literal=slack-webhook-url=https://hooks.slack.com/services/YOUR/WEBHOOK/URL \
+  --from-literal=anthropic-api-key=sk-ant-YOUR-KEY
+
+# Install
 helm install burn ./burn/charts/burn \
   --set prometheus.url=http://prometheus:9090 \
   --set schedule="0 9 * * 1-5"
 ```
+
+On EKS with IRSA (for AWS pricing and CUR access):
+
+```bash
+helm install burn ./burn/charts/burn \
+  --set prometheus.url=http://prometheus:9090 \
+  --set schedule="0 9 * * 1-5" \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::ACCOUNT:role/burn
+```
+
+The chart includes RBAC (ClusterRole with read-only access to nodes, pods, services, PVCs, PVs, ingresses, deployments, statefulsets, daemonsets, and PDBs). Disable with `--set rbac.create=false`.
 
 ### CronJob (daily Slack reports)
 
@@ -368,6 +386,7 @@ spec:
 | `CUR_DATABASE` | Athena database name | `reconcile` (AWS) |
 | `CUR_TABLE` | Athena table name | `reconcile` (AWS) |
 | `CUR_OUTPUT_LOCATION` | S3 path for Athena results | `reconcile` (AWS) |
+| `CUR_WORKGROUP` | Athena workgroup (default: primary) | `reconcile` (AWS) |
 | `CUR_REGION` | AWS region for Athena | `reconcile` (AWS) |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID | `reconcile` (Azure) |
 

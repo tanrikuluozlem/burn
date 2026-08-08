@@ -22,13 +22,13 @@ type NodeInfo struct {
 	MemoryBytes    int64
 	CPUAllocatable int64
 	MemAllocatable int64
-	CPUUsage    float64
-	MemoryUsage int64
-	GPUCount    int64
-	GPUType               string // e.g. "Tesla-T4", "A100"
-	IsSpot                bool
-	CreatedAt             time.Time
-	ProviderID            string
+	CPUUsage       float64
+	MemoryUsage    int64
+	GPUCount       int64
+	GPUType        string // e.g. "Tesla-T4", "A100"
+	IsSpot         bool
+	CreatedAt      time.Time
+	ProviderID     string
 	Labels         map[string]string
 	Pods           []PodInfo
 }
@@ -63,18 +63,19 @@ type LBServiceInfo struct {
 }
 
 type WorkloadInfo struct {
-	Name               string
-	Namespace          string
-	Kind               string
-	Replicas           int32
-	HasLocalStorage    bool
-	HasGPU             bool
-	MaxUnavailable     int32
-	PDBMinAvailable    int32
-	PDBMaxUnavailable  int32
-	PDBFound           bool
-	PriorityClass      string
-	MonthlyCost        float64
+	Name                  string
+	Namespace             string
+	Kind                  string
+	Replicas              int32
+	HasLocalStorage       bool
+	HasGPU                bool
+	MaxUnavailable        int32
+	PDBMinAvailable       int32
+	PDBMaxUnavailable     int32
+	PDBFound              bool
+	PDBUsesMaxUnavailable bool
+	PriorityClass         string
+	MonthlyCost           float64
 }
 
 type ClusterInfo struct {

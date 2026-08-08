@@ -643,7 +643,7 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 				w.MaxUnavailable = resolveIntOrPercent(d.Spec.Strategy.RollingUpdate.MaxUnavailable, w.Replicas)
 			}
 
-			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, d.Spec.Selector.MatchLabels, w.Replicas)
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound, w.PDBUsesMaxUnavailable = matchPDB(pdbs, d.Spec.Selector.MatchLabels, w.Replicas)
 
 			workloads = append(workloads, w)
 		}
@@ -673,7 +673,7 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			w.HasLocalStorage = hasLocalStorage(s.Spec.Template.Spec.Volumes) || len(s.Spec.VolumeClaimTemplates) > 0
 			w.HasGPU = hasGPURequest(s.Spec.Template.Spec.Containers)
 			w.PriorityClass = s.Spec.Template.Spec.PriorityClassName
-			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, s.Spec.Selector.MatchLabels, w.Replicas)
+			w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound, w.PDBUsesMaxUnavailable = matchPDB(pdbs, s.Spec.Selector.MatchLabels, w.Replicas)
 			workloads = append(workloads, w)
 		}
 		if list.Continue == "" {
@@ -700,7 +700,7 @@ func (c *Collector) collectWorkloads(ctx context.Context) ([]WorkloadInfo, error
 			w.HasGPU = hasGPURequest(ds.Spec.Template.Spec.Containers)
 			w.PriorityClass = ds.Spec.Template.Spec.PriorityClassName
 			if ds.Spec.Selector != nil {
-				w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound = matchPDB(pdbs, ds.Spec.Selector.MatchLabels, w.Replicas)
+				w.PDBMinAvailable, w.PDBMaxUnavailable, w.PDBFound, w.PDBUsesMaxUnavailable = matchPDB(pdbs, ds.Spec.Selector.MatchLabels, w.Replicas)
 			}
 			workloads = append(workloads, w)
 		}
@@ -747,7 +747,7 @@ func hasLocalStorage(volumes []corev1.Volume) bool {
 	return false
 }
 
-func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]string, replicas int32) (minAvail int32, maxUnavail int32, found bool) {
+func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]string, replicas int32) (minAvail int32, maxUnavail int32, found bool, usesMaxUnavailable bool) {
 	for _, pdb := range pdbs {
 		if pdb.Spec.Selector == nil {
 			continue
@@ -758,14 +758,14 @@ func matchPDB(pdbs []policyv1.PodDisruptionBudget, workloadLabels map[string]str
 		}
 		if selector.Matches(labels.Set(workloadLabels)) {
 			if pdb.Spec.MinAvailable != nil {
-				return resolveIntOrPercent(pdb.Spec.MinAvailable, replicas), 0, true
+				return resolveIntOrPercent(pdb.Spec.MinAvailable, replicas), 0, true, false
 			}
 			if pdb.Spec.MaxUnavailable != nil {
-				return 0, resolveIntOrPercent(pdb.Spec.MaxUnavailable, replicas), true
+				return 0, resolveIntOrPercent(pdb.Spec.MaxUnavailable, replicas), true, true
 			}
 		}
 	}
-	return 0, 0, false
+	return 0, 0, false, false
 }
 
 func resolveIntOrPercent(val *intstr.IntOrString, total int32) int32 {

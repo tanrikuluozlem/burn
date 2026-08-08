@@ -74,26 +74,15 @@ func CheckSpotReadiness(workloads []collector.WorkloadInfo) []SpotReadiness {
 		}
 
 		if w.PDBFound && w.Replicas > 0 {
-			minAvail := w.PDBMinAvailable
-			if w.PDBMaxUnavailable > 0 {
-				minAvail = w.Replicas - w.PDBMaxUnavailable
+			zeroTolerance := false
+			if w.PDBUsesMaxUnavailable {
+				zeroTolerance = w.PDBMaxUnavailable == 0
+			} else {
+				zeroTolerance = w.PDBMinAvailable >= w.Replicas
 			}
-			if minAvail > 0 {
-				ratio := float64(minAvail) / float64(w.Replicas)
-				if ratio > 0.5 {
-					r.Status = "not-ready"
-					r.Reason = fmt.Sprintf("PDB too strict — minAvailable/replicas = %.0f%% (>50%%)", ratio*100)
-					results = append(results, r)
-					continue
-				}
-			}
-		}
-
-		if w.Kind == "Deployment" && w.MaxUnavailable > 0 && w.Replicas >= 3 {
-			available := float64(w.Replicas-w.MaxUnavailable) / float64(w.Replicas)
-			if available < 0.9 {
+			if zeroTolerance {
 				r.Status = "not-ready"
-				r.Reason = fmt.Sprintf("rolling update too aggressive — only %.0f%% available during deploy", available*100)
+				r.Reason = "PDB requires all replicas available — zero disruption tolerance"
 				results = append(results, r)
 				continue
 			}

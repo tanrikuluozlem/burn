@@ -16,7 +16,7 @@ func TestCheckSpotReadiness(t *testing.T) {
 		{Name: "cache", Namespace: "prod", Kind: "Deployment", Replicas: 2, HasLocalStorage: true},
 		{Name: "ml-inference", Namespace: "ml", Kind: "Deployment", Replicas: 2, HasGPU: true},
 		{Name: "api", Namespace: "prod", Kind: "Deployment", Replicas: 2, PDBFound: true, PDBMinAvailable: 2},
-		{Name: "api-maxunavail", Namespace: "prod", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMaxUnavailable: 1},
+		{Name: "api-maxunavail", Namespace: "prod", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMaxUnavailable: 1, PDBUsesMaxUnavailable: true},
 		{Name: "aggressive-deploy", Namespace: "prod", Kind: "Deployment", Replicas: 3, MaxUnavailable: 2},
 		{Name: "safe-deploy", Namespace: "prod", Kind: "Deployment", Replicas: 3, MaxUnavailable: 0},
 	}
@@ -32,8 +32,8 @@ func TestCheckSpotReadiness(t *testing.T) {
 		"cache":             "not-ready",
 		"ml-inference":      "not-ready",
 		"api":               "not-ready",
-		"api-maxunavail":    "not-ready",
-		"aggressive-deploy": "not-ready",
+		"api-maxunavail":    "spot-ready",
+		"aggressive-deploy": "spot-ready",
 		"safe-deploy":       "spot-ready",
 	}
 
@@ -76,26 +76,44 @@ func TestCheckSpotReadinessGPU(t *testing.T) {
 	}
 }
 
-func TestCheckSpotReadinessPDBMaxUnavailable(t *testing.T) {
+func TestCheckSpotReadinessPDBZeroTolerance(t *testing.T) {
 	workloads := []collector.WorkloadInfo{
-		{Name: "strict-pdb", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMaxUnavailable: 1},
-		{Name: "loose-pdb", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMaxUnavailable: 3},
+		// maxUnavailable=1 → has disruption tolerance → spot-ready
+		{Name: "maxunavail-1", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMaxUnavailable: 1, PDBUsesMaxUnavailable: true},
+		// maxUnavailable=3 → has disruption tolerance → spot-ready
+		{Name: "maxunavail-3", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMaxUnavailable: 3, PDBUsesMaxUnavailable: true},
+		// maxUnavailable=0 → zero tolerance → not-ready
+		{Name: "maxunavail-0", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMaxUnavailable: 0, PDBUsesMaxUnavailable: true},
+		// minAvailable=4 on 4 replicas → zero tolerance → not-ready
+		{Name: "minavail-all", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMinAvailable: 4},
+		// minAvailable=3 on 4 replicas → has tolerance → spot-ready
+		{Name: "minavail-3", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMinAvailable: 3},
+		// minAvailable=0 → allows all disruption → spot-ready
+		{Name: "minavail-0", Kind: "Deployment", Replicas: 4, PDBFound: true, PDBMinAvailable: 0},
+		// minAvailable=6 on 10 replicas → has tolerance → spot-ready
+		{Name: "moderate-pdb", Kind: "Deployment", Replicas: 10, PDBFound: true, PDBMinAvailable: 6},
+	}
+
+	expected := map[string]string{
+		"maxunavail-1": "spot-ready",
+		"maxunavail-3": "spot-ready",
+		"maxunavail-0": "not-ready",
+		"minavail-all": "not-ready",
+		"minavail-3":   "spot-ready",
+		"minavail-0":   "spot-ready",
+		"moderate-pdb": "spot-ready",
 	}
 
 	results := CheckSpotReadiness(workloads)
 
 	for _, r := range results {
-		switch r.Name {
-		case "strict-pdb":
-			// maxUnavailable=1 → minAvailable=3 → 3/4=75% > 50% → not-ready
-			if r.Status != "not-ready" {
-				t.Errorf("strict-pdb: expected not-ready, got %s (reason: %s)", r.Status, r.Reason)
-			}
-		case "loose-pdb":
-			// maxUnavailable=3 → minAvailable=1 → 1/4=25% < 50% → spot-ready
-			if r.Status != "spot-ready" {
-				t.Errorf("loose-pdb: expected spot-ready, got %s (reason: %s)", r.Status, r.Reason)
-			}
+		want, ok := expected[r.Name]
+		if !ok {
+			t.Errorf("unexpected workload %s", r.Name)
+			continue
+		}
+		if r.Status != want {
+			t.Errorf("%s: expected %s, got %s (reason: %s)", r.Name, want, r.Status, r.Reason)
 		}
 	}
 }

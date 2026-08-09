@@ -13,6 +13,7 @@ func TestSystemPromptConstraints(t *testing.T) {
 		substr string
 	}{
 		{"no savings in prose", "Do not include dollar savings amounts in summary, title, description, or action"},
+		{"no financial ranking", "Do not rank recommendations by savings amount"},
 		{"no invented thresholds", "Do not invent thresholds"},
 		{"observation vs inference", "Distinguish observation from inference"},
 		{"PDB not Spot protection", "do NOT prevent cloud-provider Spot reclamation"},
@@ -33,6 +34,9 @@ func TestSystemPromptConstraints(t *testing.T) {
 
 	if strings.Contains(systemPrompt, "pick one strategy") || strings.Contains(systemPrompt, "Pick one strategy") {
 		t.Error("system prompt should not contain 'pick ONE strategy'")
+	}
+	if strings.Contains(systemPrompt, "dollar impact") {
+		t.Error("system prompt should not instruct model to lead with dollar impact")
 	}
 }
 

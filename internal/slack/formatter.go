@@ -198,7 +198,7 @@ func FormatAIReport(report *advisor.Report) *Message {
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Total potential savings: $%.2f/mo*", report.TotalPotentialSavings),
+				Text: fmt.Sprintf("*Largest optimization opportunity: $%.2f/mo*", report.TotalPotentialSavings),
 			},
 		})
 	}

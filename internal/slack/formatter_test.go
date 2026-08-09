@@ -22,7 +22,7 @@ func TestFormatCostReport(t *testing.T) {
 		},
 	}
 
-	msg := FormatCostReport(report)
+	msg := FormatCostReport(report, false)
 
 	if len(msg.Blocks) < 2 {
 		t.Error("expected at least 2 blocks")
@@ -47,7 +47,7 @@ func TestFormatCostReportWithWaste(t *testing.T) {
 		},
 	}
 
-	msg := FormatCostReport(report)
+	msg := FormatCostReport(report, false)
 
 	found := false
 	for _, b := range msg.Blocks {
@@ -56,7 +56,27 @@ func TestFormatCostReportWithWaste(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected potential savings block")
+		t.Error("expected potential savings block in normal (non-AI) cost report")
+	}
+}
+
+func TestFormatCostReportWithWaste_SuppressedForAI(t *testing.T) {
+	report := &analyzer.CostReport{
+		TotalNodes:    1,
+		TotalPods:     5,
+		MonthlyCost:   73.00,
+		TotalIdleCost: 50.00,
+		WasteAnalysis: analyzer.WasteAnalysis{
+			PotentialSavings: 50.0,
+		},
+	}
+
+	msg := FormatCostReport(report, true)
+
+	for _, b := range msg.Blocks {
+		if b.Text != nil && strings.Contains(b.Text.Text, "Potential savings") {
+			t.Error("legacy potential savings must not appear when AI report provides strategy-specific values")
+		}
 	}
 }
 
@@ -311,7 +331,7 @@ func TestFormatCostReport_ManyNodes(t *testing.T) {
 		Nodes:       nodes,
 	}
 
-	msg := FormatCostReport(report)
+	msg := FormatCostReport(report, false)
 	for i, b := range msg.Blocks {
 		if b.Text != nil && len(b.Text.Text) > 2900 {
 			t.Errorf("block %d exceeds 2900 chars: %d", i, len(b.Text.Text))

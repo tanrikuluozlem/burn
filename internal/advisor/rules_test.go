@@ -207,6 +207,144 @@ func TestCalculateRightSizingSavings(t *testing.T) {
 	}
 }
 
+func TestPodRightSizingP95Availability(t *testing.T) {
+	tests := []struct {
+		name           string
+		pods           []analyzer.PodEfficiency
+		wantApplicable bool
+		wantSavings    float64
+	}{
+		{
+			name: "both CPU and MEM P95 available",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+				CPUP95Usage: 0.2, CPUP95Available: true,
+				MemoryP95Usage: 200 << 20, MemP95Available: true,
+			}},
+			wantApplicable: true,
+		},
+		{
+			name: "CPU P95 available, MEM P95 unavailable — CPU only",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+				CPUP95Usage: 0.2, CPUP95Available: true,
+				MemP95Available: false,
+			}},
+			wantApplicable: true,
+		},
+		{
+			name: "CPU P95 unavailable, MEM P95 available — MEM only",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+				CPUP95Available: false,
+				MemoryP95Usage:  200 << 20, MemP95Available: true,
+			}},
+			wantApplicable: true,
+		},
+		{
+			name: "neither P95 available — no recommendation",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+				CPUP95Available: false, MemP95Available: false,
+			}},
+			wantApplicable: false,
+		},
+		{
+			name: "CPU P95 available but zero, avg > 0 — no CPU recommendation",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+				CPUP95Usage: 0, CPUP95Available: true,
+				MemP95Available: false,
+			}},
+			wantApplicable: false, // CPU P95=0 suppresses, MEM unavailable
+		},
+		{
+			name: "MEM P95 available but zero, avg > 0 — no MEM recommendation",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+				CPUP95Available: false,
+				MemoryP95Usage:  0, MemP95Available: true,
+			}},
+			wantApplicable: false,
+		},
+		{
+			name: "pod missing from P95 map — no recommendation",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+				// both Available=false (pod absent from P95 query results)
+			}},
+			wantApplicable: false,
+		},
+		{
+			name: "valid P95 — recommendation uses P95 * 1.5",
+			pods: []analyzer.PodEfficiency{{
+				CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+				MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.50, RAMCost: 10,
+				CPUP95Usage: 0.2, CPUP95Available: true,
+				MemP95Available: false,
+			}},
+			wantApplicable: true,
+			wantSavings:    14, // CPUCost * (1 - 300/1000) = 20 * 0.70 = 14
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := &analyzer.CostReport{
+				MetricsSource: "prometheus",
+				Period:        "7d",
+				AllPods:       tt.pods,
+			}
+			result := calculatePodRightSizingSavings(report)
+			if result.Applicable != tt.wantApplicable {
+				t.Errorf("Applicable = %v, want %v (reason: %s)", result.Applicable, tt.wantApplicable, result.Reason)
+			}
+			if tt.wantSavings > 0 && result.MonthlySavings != tt.wantSavings {
+				t.Errorf("MonthlySavings = %.2f, want %.2f", result.MonthlySavings, tt.wantSavings)
+			}
+		})
+	}
+}
+
+func TestRightSizingNoperiodSuppression(t *testing.T) {
+	// Instant metrics only — InefficientPods exist but no P95 available
+	report := &analyzer.CostReport{
+		MetricsSource: "prometheus",
+		AllPods: []analyzer.PodEfficiency{{
+			CPURequest: 1000, CPUUsage: 0.1, CPUEfficiency: 0.10, CPUCost: 20,
+			MemRequest: 1 << 30, MemUsage: 100 << 20, MemEfficiency: 0.10, RAMCost: 10,
+			// No P95 available — instant only
+		}},
+	}
+	result := calculatePodRightSizingSavings(report)
+	if result.Applicable {
+		t.Errorf("should not produce rightsizing from instant metrics (no P95)")
+	}
+}
+
+func TestRightSizingNodeFallbackUnchanged(t *testing.T) {
+	report := &analyzer.CostReport{
+		MetricsSource: "requests",
+		Nodes: []analyzer.NodeCost{
+			{Name: "node-1", CPURequested: 0.20, MemRequested: 0.20, MonthlyPrice: 100},
+		},
+	}
+	result := calculateRightSizingSavings(report)
+	if !result.Applicable {
+		t.Error("node-level rightsizing should still work without Prometheus")
+	}
+	if result.MonthlySavings != 50 {
+		t.Errorf("MonthlySavings = %.2f, want 50", result.MonthlySavings)
+	}
+}
+
 func TestTotalSavings(t *testing.T) {
 	savings := &PotentialSavings{
 		SpotConversion:    &SavingsOpportunity{Applicable: true, MonthlySavings: 100},
@@ -219,4 +357,3 @@ func TestTotalSavings(t *testing.T) {
 		t.Errorf("TotalSavings = %v, want 100 (should return max of applicable strategies)", total)
 	}
 }
-

@@ -162,28 +162,19 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 
 		var cpuSavings, ramSavings float64
 
-		// Use P95 usage for safer recommendations, fall back to avg usage
-		cpuUsage := pod.CPUUsage
-		if pod.CPUP95Usage > 0 {
-			cpuUsage = pod.CPUP95Usage
-		}
-		memUsage := pod.MemUsage
-		if pod.MemoryP95Usage > 0 {
-			memUsage = pod.MemoryP95Usage
-		}
-
-		// CPU: if efficiency < 50% and pod actually has some usage, recommend downsizing
-		if pod.CPUEfficiency > 0 && pod.CPUEfficiency < 0.50 && pod.CPUCost > 0 {
-			// Recommend request = p95_usage * 1.5 (50% headroom above peak)
-			recommended := cpuUsage * 1.5 * 1000 // to millicores
+		// CPU: recommend only when P95 was measured and is positive
+		if pod.CPUP95Available && pod.CPUP95Usage > 0 &&
+			pod.CPUEfficiency > 0 && pod.CPUEfficiency < 0.50 && pod.CPUCost > 0 {
+			recommended := pod.CPUP95Usage * 1.5 * 1000 // p95 * 1.5 in millicores
 			if recommended < float64(pod.CPURequest) {
 				cpuSavings = pod.CPUCost * (1.0 - recommended/float64(pod.CPURequest))
 			}
 		}
 
-		// RAM: if efficiency < 50% and pod actually has some usage, recommend downsizing
-		if pod.MemEfficiency > 0 && pod.MemEfficiency < 0.50 && pod.RAMCost > 0 {
-			recommended := float64(memUsage) * 1.5
+		// Memory: recommend only when P95 was measured and is positive
+		if pod.MemP95Available && pod.MemoryP95Usage > 0 &&
+			pod.MemEfficiency > 0 && pod.MemEfficiency < 0.50 && pod.RAMCost > 0 {
+			recommended := float64(pod.MemoryP95Usage) * 1.5
 			if recommended < float64(pod.MemRequest) {
 				ramSavings = pod.RAMCost * (1.0 - recommended/float64(pod.MemRequest))
 			}
@@ -261,4 +252,3 @@ func (p *PotentialSavings) TotalSavings() float64 {
 	}
 	return max
 }
-

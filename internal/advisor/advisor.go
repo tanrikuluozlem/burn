@@ -110,7 +110,8 @@ Constraints:
 - Use real node names from data. Do not invent names or numbers.
 - Pick one strategy: spot or consolidation, not both.
 - Reference namespace data: compare costs, flag dev/qa vs prod imbalances.
-- When p95 data is available, recommend request = p95 × 1.5 (50% headroom).
+- When p95 data is shown for a pod, recommend request = p95 × 1.5 (50% headroom).
+- When no p95 data is shown, observe the inefficiency but do not recommend specific CPU/memory request values.
 - Title and description values must match. Only use real kubectl flags (e.g., --dry-run=client not --dry-run=true).`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
@@ -175,8 +176,13 @@ func buildPrompt(report *analyzer.CostReport) string {
 			ns.Name, ns.PodCount, ns.MonthlyCost, ns.CPUCost, ns.RAMCost)
 	}
 
-	// Pre-calculated top inefficient pods with p95 data
-	podSummary := "\nTOP INEFFICIENT PODS (use these exact values):\n"
+	podHeader := "TOP INEFFICIENT PODS (use these exact values):\n"
+	if report.Period != "" {
+		podHeader = fmt.Sprintf("TOP INEFFICIENT PODS (%s avg, P95 where available):\n", report.Period)
+	} else if report.MetricsSource == "prometheus" {
+		podHeader = "TOP INEFFICIENT PODS (instant metrics, no P95 — do not recommend specific request values):\n"
+	}
+	podSummary := "\n" + podHeader
 	for _, p := range report.InefficientPods {
 		p95Info := ""
 		if p.CPUP95Usage > 0 {

@@ -20,65 +20,35 @@ type SavingsOpportunity struct {
 	AffectedNodes  []string
 }
 
-type SavingsConfig struct {
-	SpotDiscountRate float64 // overridden by real pricing when available
-}
+type SavingsConfig struct{}
 
 func DefaultSavingsConfig() SavingsConfig {
 	return SavingsConfig{}
 }
 
 func CalculateSavings(report *analyzer.CostReport, cfg SavingsConfig) *PotentialSavings {
-	for _, s := range report.SpotReadiness {
-		if s.Status == "spot-ready" && s.Discount > 0 {
-			cfg.SpotDiscountRate = s.Discount
-			break
-		}
-	}
-
 	savings := &PotentialSavings{}
-	savings.SpotConversion = calculateSpotSavings(report, cfg.SpotDiscountRate)
+	savings.SpotConversion = calculateSpotSavings(report)
 	savings.NodeConsolidation = calculateConsolidationSavings(report)
 	savings.RightSizing = calculateRightSizingSavings(report)
 
 	return savings
 }
 
-func calculateSpotSavings(report *analyzer.CostReport, discountRate float64) *SavingsOpportunity {
-	var onDemandCost float64
-	var onDemandNodes []string
-
-	for _, node := range report.Nodes {
-		if !node.IsSpot {
-			onDemandCost += node.MonthlyPrice
-			onDemandNodes = append(onDemandNodes, node.Name)
-		}
-	}
-
-	if len(onDemandNodes) == 0 {
+func calculateSpotSavings(report *analyzer.CostReport) *SavingsOpportunity {
+	if report.SpotSavings <= 0 {
 		return &SavingsOpportunity{
 			Type:       "spot_conversion",
 			Applicable: false,
-			Reason:     "All nodes are already spot instances",
+			Reason:     "No spot-ready workloads with pricing data",
 		}
 	}
-
-	if discountRate == 0 {
-		return &SavingsOpportunity{
-			Type:       "spot_conversion",
-			Applicable: false,
-			Reason:     "No spot pricing data available",
-		}
-	}
-
-	monthlySavings := onDemandCost * discountRate
 
 	return &SavingsOpportunity{
 		Type:           "spot_conversion",
-		MonthlySavings: monthlySavings,
+		MonthlySavings: report.SpotSavings,
 		Applicable:     true,
-		Reason:         fmt.Sprintf("Max potential savings if stateless workloads moved to spot (%.0f%% discount)", discountRate*100),
-		AffectedNodes:  onDemandNodes,
+		Reason:         "Move spot-ready workloads to Spot instances",
 	}
 }
 

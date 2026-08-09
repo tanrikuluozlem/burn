@@ -75,10 +75,10 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport, focu
 		return nil, err
 	}
 
-	var totalSavings float64
-	for _, r := range recommendations {
-		totalSavings += r.EstimatedSavings
+	for i := range recommendations {
+		recommendations[i].EstimatedSavings = 0
 	}
+	savings := CalculateSavings(report, DefaultSavingsConfig())
 
 	var tokensUsed int
 	if resp.Usage.InputTokens > 0 {
@@ -88,7 +88,7 @@ func (a *Advisor) Analyze(ctx context.Context, report *analyzer.CostReport, focu
 	return &Report{
 		Recommendations:       recommendations,
 		Summary:               summary,
-		TotalPotentialSavings: totalSavings,
+		TotalPotentialSavings: savings.TotalSavings(),
 		GeneratedAt:           time.Now().UTC(),
 		ModelUsed:             string(a.model),
 		TokensUsed:            tokensUsed,
@@ -99,19 +99,27 @@ const systemPrompt = `You are a Kubernetes FinOps expert. Analyze cluster data a
 
 Summary: 2 sentences max. Lead with the key finding and dollar impact.
 
-Each recommendation needs: id, category ("cost"), severity ("high" if >$100 savings), title with real node names, description with risk warning, action as exact command, estimated_savings (only on primary recommendation).
+Each recommendation needs: id, category ("cost"), severity, title with real node names, description with risk warning, action as exact command. estimated_savings must be 0 — the engine calculates savings separately.
 
 Risk warnings to include:
 - Spot: only for stateless workloads with >1 replica, can be interrupted (AWS 2 min, Azure 30 sec, GCP 30 sec)
-- Consolidation: test failover first, check PodDisruptionBudgets
+- Consolidation: test failover first, verify PodDisruptionBudgets allow voluntary eviction
+- PDBs protect against voluntary disruptions (drain, rolling updates) — they do NOT prevent cloud-provider Spot reclamation. Multiple replicas improve resilience but do not guarantee availability during interruption.
 
 Constraints:
-- Use the pre-calculated savings value from the prompt exactly. Do not calculate your own savings.
+- Do not include dollar savings amounts in summary, title, description, or action. The engine displays savings separately.
+- Do not invent thresholds (e.g., "1m minimum", "50m minimum", "7 days required") unless the data provides that evidence.
 - Use real node names from data. Do not invent names or numbers.
-- Pick one strategy: spot or consolidation, not both.
-- Reference namespace data: compare costs, flag dev/qa vs prod imbalances.
+- Distinguish observation from inference: a low-usage or standalone pod is a candidate for review, not automatically "forgotten", "suspicious", "unused", or "safe to delete".
+- An unmatched resource should be investigated, not assumed orphaned or safe to remove.
+- A high-idle node is a candidate for review, not automatically safe to drain.
 - When p95 data is shown for a pod, recommend request = p95 × 1.5 (50% headroom).
 - When no p95 data is shown, observe the inefficiency but do not recommend specific CPU/memory request values.
+- Reference namespace data: compare costs, flag dev/qa vs prod imbalances.
+- The action field must contain only read-only commands (kubectl get, describe, logs). Do not generate mutating commands (patch, apply, delete, drain, scale, cordon, edit, set) or kubectl top in action, title, description, or summary.
+- Describe intended changes in prose without constructing the mutation command.
+- kubectl top shows current usage, not historical P95. Do not describe it as a P95 data source.
+- Do not assume Spot node groups, labels, or other cluster state that Burn has not verified.
 - Title and description values must match. Only use real kubectl flags (e.g., --dry-run=client not --dry-run=true).`
 
 var recommendationSchema = anthropic.ToolInputSchemaParam{
@@ -136,7 +144,7 @@ var recommendationSchema = anthropic.ToolInputSchemaParam{
 					},
 					"action": map[string]any{
 						"type":        "string",
-						"description": "Specific command or step to fix",
+						"description": "Read-only verification command (kubectl get, describe, logs). No mutating commands.",
 					},
 					"estimated_savings": map[string]any{
 						"type":        "number",
@@ -197,25 +205,6 @@ func buildPrompt(report *analyzer.CostReport) string {
 			p95Info, p.MonthlyCost)
 	}
 
-	savings := CalculateSavings(report, DefaultSavingsConfig())
-
-	savingsInfo := "\nPRE-CALCULATED SAVINGS (use these exact values, pick ONE):\n"
-
-	if savings.SpotConversion != nil && savings.SpotConversion.Applicable {
-		savingsInfo += fmt.Sprintf("• Spot: up to $%.2f/month (only stateless workloads)\n", savings.SpotConversion.MonthlySavings)
-	}
-	if savings.NodeConsolidation != nil && savings.NodeConsolidation.Applicable && len(savings.NodeConsolidation.AffectedNodes) > 0 {
-		savingsInfo += fmt.Sprintf("• Consolidation: $%.2f/month (remove %s)\n",
-			savings.NodeConsolidation.MonthlySavings,
-			savings.NodeConsolidation.AffectedNodes[0])
-	}
-	if savings.RightSizing != nil && savings.RightSizing.Applicable {
-		savingsInfo += fmt.Sprintf("• Rightsizing: $%.2f/month\n", savings.RightSizing.MonthlySavings)
-	}
-
-	savingsInfo += fmt.Sprintf("\nUse $%.2f for estimated_savings (best option).\n", savings.TotalSavings())
-
-	// Spot readiness summary for AI
 	spotSummary := ""
 	if len(report.SpotReadiness) > 0 {
 		ready := 0
@@ -224,8 +213,7 @@ func buildPrompt(report *analyzer.CostReport) string {
 				ready++
 			}
 		}
-		spotSummary = fmt.Sprintf("\nSPOT READINESS (%d/%d workloads spot-ready, potential savings $%.2f/mo):\n",
-			ready, len(report.SpotReadiness), report.SpotSavings)
+		spotSummary = fmt.Sprintf("\nSPOT READINESS (%d/%d workloads spot-ready):\n", ready, len(report.SpotReadiness))
 		for _, s := range report.SpotReadiness {
 			extra := ""
 			if s.Status == "spot-ready" && s.Discount > 0 {
@@ -236,7 +224,7 @@ func buildPrompt(report *analyzer.CostReport) string {
 		}
 	}
 
-	return fmt.Sprintf("Cluster data:\n%s%s%s%s%s%s", string(data), nodeSummary, nsSummary, podSummary, savingsInfo, spotSummary)
+	return fmt.Sprintf("Cluster data:\n%s%s%s%s%s", string(data), nodeSummary, nsSummary, podSummary, spotSummary)
 }
 
 type toolInput struct {
@@ -327,11 +315,10 @@ func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string, e
 				ready++
 			}
 		}
-		spotSummary = fmt.Sprintf("\n\nSPOT SAVINGS (pre-calculated, use these exact values):\n%d/%d workloads spot-ready, total savings: $%.2f/mo\n",
-			ready, len(report.SpotReadiness), report.SpotSavings)
+		spotSummary = fmt.Sprintf("\n\nSPOT READINESS (%d/%d workloads spot-ready):\n", ready, len(report.SpotReadiness))
 		for _, s := range report.SpotReadiness {
 			if s.Status == "spot-ready" {
-				spotSummary += fmt.Sprintf("• %s/%s — $%.2f/mo per pod\n", s.Namespace, s.Name, s.MonthlyCost)
+				spotSummary += fmt.Sprintf("• %s/%s — spot-ready\n", s.Namespace, s.Name)
 			}
 		}
 	}
@@ -351,12 +338,16 @@ Guidelines:
 - Always respond in English regardless of the question language
 - Be conversational but concise
 - Use specific data from the cluster report (node names, actual costs, utilization percentages)
-- When suggesting actions, provide exact kubectl/eksctl commands
+- When suggesting actions, provide exact kubectl/eksctl commands as examples for review
 - Explain trade-offs (e.g., spot instances are cheaper but can be interrupted)
 - If you don't have enough data to answer, say so
 - Format numbers clearly ($X.XX for costs, X% for percentages)
 - CPU usage in the report is in cores. Convert to millicores for display: 0.005 cores = 5m, 0.0001 cores = <1m
 - Do NOT calculate your own values. Use the data as provided. Never sum, multiply, or derive numbers — only quote exact values from the JSON data.
+- Do not invent specific CPU/memory request targets unless p95 data is provided for that pod.
 - When listing items, COUNT them from the data. Do not guess the count — verify it matches the items you list.
 - When showing totals, use ONLY the pre-calculated fields (total_estimated, total_actual, unmatched_compute). Never add up individual line items yourself.
+- Distinguish observation from inference: low-usage or standalone pods are candidates for review, not automatically "forgotten" or "safe to delete".
+- PDBs protect against voluntary disruptions only — they do NOT prevent cloud-provider Spot reclamation.
+- Do not assume cluster state that is not in the provided data (e.g., existence of Spot node groups, labels, autoscaler config).
 - Only use real kubectl flags. Do NOT invent flags.`

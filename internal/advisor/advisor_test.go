@@ -1,6 +1,7 @@
 package advisor
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -88,5 +89,56 @@ func TestBuildPromptNoSavingsValues(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "NODE SUMMARY") {
 		t.Error("buildPrompt must contain NODE SUMMARY")
+	}
+}
+
+func TestReportJSON_BackwardCompatAndNewFields(t *testing.T) {
+	r := &Report{
+		TotalPotentialSavings: 170,
+		SpotSavings:           40,
+		ConsolidationSavings:  30,
+		RightSizingSavings:    170,
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+
+	if !strings.Contains(s, `"total_potential_savings"`) {
+		t.Error("JSON must contain total_potential_savings for backward compat")
+	}
+	if !strings.Contains(s, `"spot_savings"`) {
+		t.Error("JSON must contain spot_savings")
+	}
+	if !strings.Contains(s, `"consolidation_savings"`) {
+		t.Error("JSON must contain consolidation_savings")
+	}
+	if !strings.Contains(s, `"rightsizing_savings"`) {
+		t.Error("JSON must contain rightsizing_savings")
+	}
+}
+
+func TestReportJSON_OmitEmptyNewFields(t *testing.T) {
+	r := &Report{
+		TotalPotentialSavings: 0,
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+
+	if strings.Contains(s, `"spot_savings"`) {
+		t.Error("spot_savings should be omitted when zero")
+	}
+	if strings.Contains(s, `"consolidation_savings"`) {
+		t.Error("consolidation_savings should be omitted when zero")
+	}
+	if strings.Contains(s, `"rightsizing_savings"`) {
+		t.Error("rightsizing_savings should be omitted when zero")
+	}
+	if !strings.Contains(s, `"total_potential_savings"`) {
+		t.Error("total_potential_savings must always be present (no omitempty)")
 	}
 }

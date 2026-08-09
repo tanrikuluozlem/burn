@@ -193,12 +193,22 @@ func FormatAIReport(report *advisor.Report) *Message {
 		})
 	}
 
-	if report.TotalPotentialSavings > 0 {
+	var savingsLines []string
+	if report.RightSizingSavings > 0 {
+		savingsLines = append(savingsLines, fmt.Sprintf("Rightsizing allocation opportunity: $%.2f/mo", report.RightSizingSavings))
+	}
+	if report.SpotSavings > 0 {
+		savingsLines = append(savingsLines, fmt.Sprintf("Spot pricing opportunity: $%.2f/mo", report.SpotSavings))
+	}
+	if report.ConsolidationSavings > 0 {
+		savingsLines = append(savingsLines, fmt.Sprintf("Consolidation opportunity: $%.2f/mo", report.ConsolidationSavings))
+	}
+	if len(savingsLines) > 0 {
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Largest optimization opportunity: $%.2f/mo*", report.TotalPotentialSavings),
+				Text: "*" + strings.Join(savingsLines, "\n") + "*",
 			},
 		})
 	}
@@ -265,4 +275,3 @@ func costReportHeader(period string) string {
 	}
 	return "Kubernetes Cost Report"
 }
-

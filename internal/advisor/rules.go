@@ -202,6 +202,13 @@ func calculateNodeRightSizingSavings(report *analyzer.CostReport) *SavingsOpport
 	}
 }
 
+func (p *PotentialSavings) ApplicableSavings(s *SavingsOpportunity) float64 {
+	if s != nil && s.Applicable && s.MonthlySavings > 0 {
+		return s.MonthlySavings
+	}
+	return 0
+}
+
 // TotalSavings returns the max of applicable strategies (they overlap, so summing would be wrong).
 func (p *PotentialSavings) TotalSavings() float64 {
 	var max float64

@@ -60,23 +60,25 @@ type NodeCost struct {
 }
 
 type PodEfficiency struct {
-	Name           string
-	Namespace      string
-	OwnerKind      string  `json:"-"`
-	OwnerName      string  `json:"-"`
-	CPURequest     int64   // millicores
-	CPUUsage       float64 // cores (from Prometheus)
-	CPUEfficiency  float64 // usage/request ratio (0-1+)
-	MemRequest     int64   // bytes
-	MemUsage       int64   // bytes (from Prometheus)
-	MemEfficiency  float64 // usage/request ratio (0-1+)
-	MonthlyCost    float64 // estimated cost based on resource allocation
-	CPUCost        float64 `json:"cpu_cost"`
-	RAMCost        float64 `json:"ram_cost"`
-	GPUCost        float64 `json:"gpu_cost,omitempty"`
-	GPURequest     int64   `json:"gpu_request,omitempty"`
-	CPUP95Usage    float64 `json:"cpu_p95_usage,omitempty"` // p95 CPU usage in cores
-	MemoryP95Usage int64   `json:"mem_p95_usage,omitempty"` // p95 memory usage in bytes
+	Name            string
+	Namespace       string
+	OwnerKind       string  `json:"-"`
+	OwnerName       string  `json:"-"`
+	CPURequest      int64   // millicores
+	CPUUsage        float64 // cores (from Prometheus)
+	CPUEfficiency   float64 // usage/request ratio (0-1+)
+	MemRequest      int64   // bytes
+	MemUsage        int64   // bytes (from Prometheus)
+	MemEfficiency   float64 // usage/request ratio (0-1+)
+	MonthlyCost     float64 // estimated cost based on resource allocation
+	CPUCost         float64 `json:"cpu_cost"`
+	RAMCost         float64 `json:"ram_cost"`
+	GPUCost         float64 `json:"gpu_cost,omitempty"`
+	GPURequest      int64   `json:"gpu_request,omitempty"`
+	CPUP95Usage     float64 `json:"cpu_p95_usage,omitempty"` // p95 CPU usage in cores
+	MemoryP95Usage  int64   `json:"mem_p95_usage,omitempty"` // p95 memory usage in bytes
+	CPUP95Available bool    `json:"-"`
+	MemP95Available bool    `json:"-"`
 }
 
 type NamespaceCost struct {

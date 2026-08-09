@@ -148,3 +148,56 @@ func TestResolveWorkloadOwner(t *testing.T) {
 		})
 	}
 }
+
+func TestP95AvailabilityFromMapMembership(t *testing.T) {
+	pods := []PodInfo{
+		{Name: "has-p95", Namespace: "ns"},
+		{Name: "missing", Namespace: "ns"},
+		{Name: "zero-p95", Namespace: "ns"},
+	}
+
+	cpuP95 := map[string]float64{
+		"ns/has-p95":  0.5,
+		"ns/zero-p95": 0.0, // measured zero
+	}
+	memP95 := map[string]int64{
+		"ns/has-p95": 500 << 20,
+		// missing and zero-p95 absent
+	}
+
+	for i := range pods {
+		key := pods[i].Namespace + "/" + pods[i].Name
+		if cpu, ok := cpuP95[key]; ok {
+			pods[i].CPUP95Usage = cpu
+			pods[i].CPUP95Available = true
+		}
+		if mem, ok := memP95[key]; ok {
+			pods[i].MemoryP95Usage = mem
+			pods[i].MemP95Available = true
+		}
+	}
+
+	// has-p95: both available
+	if !pods[0].CPUP95Available || !pods[0].MemP95Available {
+		t.Error("has-p95 should have both P95 available")
+	}
+	if pods[0].CPUP95Usage != 0.5 {
+		t.Errorf("has-p95 CPU P95 = %v, want 0.5", pods[0].CPUP95Usage)
+	}
+
+	// missing: neither available
+	if pods[1].CPUP95Available || pods[1].MemP95Available {
+		t.Error("missing should have no P95 available")
+	}
+
+	// zero-p95: CPU available (measured zero), MEM unavailable
+	if !pods[2].CPUP95Available {
+		t.Error("zero-p95 should have CPU P95 available (measured zero)")
+	}
+	if pods[2].CPUP95Usage != 0 {
+		t.Errorf("zero-p95 CPU P95 = %v, want 0", pods[2].CPUP95Usage)
+	}
+	if pods[2].MemP95Available {
+		t.Error("zero-p95 should not have MEM P95 available")
+	}
+}

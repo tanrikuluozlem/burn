@@ -113,16 +113,7 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 	}
 
 	if len(info.Workloads) > 0 && hasCloud {
-		nsCosts := make(map[string]float64)
-		for _, ns := range report.Namespaces {
-			if ns.PodCount > 0 {
-				nsCosts[ns.Name] = (ns.MonthlyCost - ns.StorageCost) / float64(ns.PodCount)
-			}
-		}
-		for i := range info.Workloads {
-			perPod := nsCosts[info.Workloads[i].Namespace]
-			info.Workloads[i].MonthlyCost = perPod * float64(info.Workloads[i].Replicas)
-		}
+		assignWorkloadCosts(info.Workloads, allPods, report.Namespaces)
 		report.SpotReadiness = CheckSpotReadiness(info.Workloads)
 
 		// assumes homogeneous cluster for spot discount lookup
@@ -276,6 +267,8 @@ func calculatePodEfficiencies(pods []collector.PodInfo, np *pricing.NodePricing,
 		result = append(result, PodEfficiency{
 			Name:           pod.Name,
 			Namespace:      pod.Namespace,
+			OwnerKind:      pod.OwnerKind,
+			OwnerName:      pod.OwnerName,
 			CPURequest:     pod.CPURequest,
 			CPUUsage:       pod.CPUUsage,
 			CPUEfficiency:  cpuEff,
@@ -401,6 +394,65 @@ func addStorageCostToNamespaces(namespaces []NamespaceCost, pvCosts []PVCost) {
 		if idx, ok := nsMap[pv.Namespace]; ok {
 			namespaces[idx].StorageCost += pv.MonthlyCost
 			namespaces[idx].MonthlyCost += pv.MonthlyCost
+		}
+	}
+}
+
+func workloadKey(namespace, kind, name string) string {
+	return namespace + "/" + kind + "/" + name
+}
+
+// assignWorkloadCosts attributes per-pod costs to workloads by ownership.
+// Unresolved workloads receive the namespace residual proportional to replicas.
+func assignWorkloadCosts(workloads []collector.WorkloadInfo, pods []PodEfficiency, namespaces []NamespaceCost) {
+	podCostByOwner := make(map[string]float64)
+	for _, p := range pods {
+		if p.OwnerKind == "" {
+			continue
+		}
+		key := workloadKey(p.Namespace, p.OwnerKind, p.OwnerName)
+		podCostByOwner[key] += p.MonthlyCost
+	}
+
+	// Namespace compute costs (excluding storage)
+	nsComputeCost := make(map[string]float64)
+	for _, ns := range namespaces {
+		nsComputeCost[ns.Name] = ns.MonthlyCost - ns.StorageCost
+	}
+
+	// First pass: assign resolved workloads, track resolved totals per namespace
+	nsResolvedTotal := make(map[string]float64)
+	type unresolvedEntry struct {
+		index    int
+		replicas int32
+	}
+	nsUnresolved := make(map[string][]unresolvedEntry)
+
+	for i := range workloads {
+		w := &workloads[i]
+		key := workloadKey(w.Namespace, w.Kind, w.Name)
+		if cost, ok := podCostByOwner[key]; ok {
+			w.MonthlyCost = cost
+			nsResolvedTotal[w.Namespace] += cost
+		} else if w.Replicas == 0 {
+			w.MonthlyCost = 0
+		} else {
+			nsUnresolved[w.Namespace] = append(nsUnresolved[w.Namespace], unresolvedEntry{i, w.Replicas})
+		}
+	}
+
+	// Second pass: distribute residual to unresolved workloads
+	for ns, entries := range nsUnresolved {
+		residual := math.Max(0, nsComputeCost[ns]-nsResolvedTotal[ns])
+		var totalReplicas int32
+		for _, e := range entries {
+			totalReplicas += e.replicas
+		}
+		if totalReplicas == 0 {
+			continue
+		}
+		for _, e := range entries {
+			workloads[e.index].MonthlyCost = residual * float64(e.replicas) / float64(totalReplicas)
 		}
 	}
 }

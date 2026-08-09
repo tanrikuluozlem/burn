@@ -498,7 +498,7 @@ func outputAIReport(report *advisor.Report) {
 	}
 
 	if report.TotalPotentialSavings > 0 {
-		fmt.Printf("Total potential savings: $%.2f/mo\n", report.TotalPotentialSavings)
+		fmt.Printf("Largest optimization opportunity: $%.2f/mo\n", report.TotalPotentialSavings)
 	}
 }
 

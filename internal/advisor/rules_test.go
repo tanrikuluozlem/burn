@@ -346,3 +346,106 @@ func TestTotalSavings(t *testing.T) {
 		t.Errorf("TotalSavings = %v, want 100 (should return max of applicable strategies)", total)
 	}
 }
+
+func TestApplicableSavings(t *testing.T) {
+	savings := &PotentialSavings{}
+
+	if savings.ApplicableSavings(nil) != 0 {
+		t.Error("nil opportunity should return 0")
+	}
+	if savings.ApplicableSavings(&SavingsOpportunity{Applicable: false, MonthlySavings: 50}) != 0 {
+		t.Error("non-applicable should return 0")
+	}
+	if savings.ApplicableSavings(&SavingsOpportunity{Applicable: true, MonthlySavings: 0}) != 0 {
+		t.Error("zero savings should return 0")
+	}
+	if savings.ApplicableSavings(&SavingsOpportunity{Applicable: true, MonthlySavings: 42.5}) != 42.5 {
+		t.Error("applicable with positive savings should return MonthlySavings")
+	}
+}
+
+func TestIndividualSavingsFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		spot       *SavingsOpportunity
+		consol     *SavingsOpportunity
+		rightsiz   *SavingsOpportunity
+		wantSpot   float64
+		wantConsol float64
+		wantRight  float64
+		wantTotal  float64
+	}{
+		{
+			name:       "all three applicable",
+			spot:       &SavingsOpportunity{Applicable: true, MonthlySavings: 40},
+			consol:     &SavingsOpportunity{Applicable: true, MonthlySavings: 30},
+			rightsiz:   &SavingsOpportunity{Applicable: true, MonthlySavings: 170},
+			wantSpot:   40,
+			wantConsol: 30,
+			wantRight:  170,
+			wantTotal:  170,
+		},
+		{
+			name:       "only spot applicable",
+			spot:       &SavingsOpportunity{Applicable: true, MonthlySavings: 40},
+			consol:     &SavingsOpportunity{Applicable: false},
+			rightsiz:   &SavingsOpportunity{Applicable: false},
+			wantSpot:   40,
+			wantConsol: 0,
+			wantRight:  0,
+			wantTotal:  40,
+		},
+		{
+			name:       "only rightsizing applicable",
+			spot:       &SavingsOpportunity{Applicable: false},
+			consol:     &SavingsOpportunity{Applicable: false},
+			rightsiz:   &SavingsOpportunity{Applicable: true, MonthlySavings: 170},
+			wantSpot:   0,
+			wantConsol: 0,
+			wantRight:  170,
+			wantTotal:  170,
+		},
+		{
+			name:       "only consolidation applicable",
+			spot:       &SavingsOpportunity{Applicable: false},
+			consol:     &SavingsOpportunity{Applicable: true, MonthlySavings: 30},
+			rightsiz:   &SavingsOpportunity{Applicable: false},
+			wantSpot:   0,
+			wantConsol: 30,
+			wantRight:  0,
+			wantTotal:  30,
+		},
+		{
+			name:       "none applicable",
+			spot:       &SavingsOpportunity{Applicable: false},
+			consol:     &SavingsOpportunity{Applicable: false},
+			rightsiz:   &SavingsOpportunity{Applicable: false},
+			wantSpot:   0,
+			wantConsol: 0,
+			wantRight:  0,
+			wantTotal:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &PotentialSavings{
+				SpotConversion:    tt.spot,
+				NodeConsolidation: tt.consol,
+				RightSizing:       tt.rightsiz,
+			}
+			if got := s.ApplicableSavings(s.SpotConversion); got != tt.wantSpot {
+				t.Errorf("SpotSavings = %.2f, want %.2f", got, tt.wantSpot)
+			}
+			if got := s.ApplicableSavings(s.NodeConsolidation); got != tt.wantConsol {
+				t.Errorf("ConsolidationSavings = %.2f, want %.2f", got, tt.wantConsol)
+			}
+			if got := s.ApplicableSavings(s.RightSizing); got != tt.wantRight {
+				t.Errorf("RightSizingSavings = %.2f, want %.2f", got, tt.wantRight)
+			}
+			if got := s.TotalSavings(); got != tt.wantTotal {
+				t.Errorf("TotalSavings = %.2f, want %.2f", got, tt.wantTotal)
+			}
+		})
+	}
+}

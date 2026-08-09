@@ -64,6 +64,8 @@ func TestFormatAIReport(t *testing.T) {
 	report := &advisor.Report{
 		Summary:               "Cluster is over-provisioned",
 		TotalPotentialSavings: 150.0,
+		RightSizingSavings:    150.0,
+		SpotSavings:           40.0,
 		Recommendations: []advisor.Recommendation{
 			{Title: "Downsize nodes", Description: "Use smaller instances", Severity: advisor.SeverityHigh},
 		},
@@ -74,6 +76,94 @@ func TestFormatAIReport(t *testing.T) {
 	if len(msg.Blocks) < 3 {
 		t.Errorf("expected at least 3 blocks, got %d", len(msg.Blocks))
 	}
+
+	text := blocksText(msg.Blocks)
+	if strings.Contains(text, "Largest optimization opportunity") {
+		t.Error("must not contain 'Largest optimization opportunity'")
+	}
+	if !strings.Contains(text, "Rightsizing allocation opportunity") {
+		t.Error("missing rightsizing opportunity line")
+	}
+	if !strings.Contains(text, "Spot pricing opportunity") {
+		t.Error("missing spot opportunity line")
+	}
+}
+
+func TestFormatAIReport_SeparateOpportunities(t *testing.T) {
+	tests := []struct {
+		name        string
+		spot        float64
+		consol      float64
+		rightsiz    float64
+		wantSpot    bool
+		wantConsol  bool
+		wantRight   bool
+		wantLargest bool
+	}{
+		{
+			name: "all three applicable",
+			spot: 40, consol: 30, rightsiz: 170,
+			wantSpot: true, wantConsol: true, wantRight: true,
+		},
+		{
+			name:     "only spot",
+			spot:     40,
+			wantSpot: true,
+		},
+		{
+			name:       "only consolidation",
+			consol:     30,
+			wantConsol: true,
+		},
+		{
+			name:      "only rightsizing",
+			rightsiz:  170,
+			wantRight: true,
+		},
+		{
+			name: "none applicable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := &advisor.Report{
+				Summary:              "test",
+				SpotSavings:          tt.spot,
+				ConsolidationSavings: tt.consol,
+				RightSizingSavings:   tt.rightsiz,
+				Recommendations: []advisor.Recommendation{
+					{Title: "Test", Description: "d", Severity: advisor.SeverityLow},
+				},
+			}
+			msg := FormatAIReport(report)
+			text := blocksText(msg.Blocks)
+
+			if strings.Contains(text, "Largest optimization opportunity") {
+				t.Error("must not contain 'Largest optimization opportunity'")
+			}
+			if tt.wantSpot != strings.Contains(text, "Spot pricing opportunity") {
+				t.Errorf("Spot line presence = %v, want %v", !tt.wantSpot, tt.wantSpot)
+			}
+			if tt.wantConsol != strings.Contains(text, "Consolidation opportunity") {
+				t.Errorf("Consolidation line presence = %v, want %v", !tt.wantConsol, tt.wantConsol)
+			}
+			if tt.wantRight != strings.Contains(text, "Rightsizing allocation opportunity") {
+				t.Errorf("Rightsizing line presence = %v, want %v", !tt.wantRight, tt.wantRight)
+			}
+		})
+	}
+}
+
+func blocksText(blocks []Block) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if b.Text != nil {
+			sb.WriteString(b.Text.Text)
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
 }
 
 func TestSeverityEmoji(t *testing.T) {
@@ -140,7 +230,7 @@ func TestSplitText_Boundary(t *testing.T) {
 func TestSplitText_UTF8Turkish(t *testing.T) {
 	// "ğüşıöç" = 12 bytes (6 two-byte runes)
 	line := strings.Repeat("ğüşıöç", 200) + "\n" // 2401 bytes per line
-	input := line + line                           // ~4802 bytes, forces split
+	input := line + line                         // ~4802 bytes, forces split
 
 	chunks := SplitText(input)
 	if len(chunks) < 2 {
@@ -239,6 +329,7 @@ func TestFormatAIReport_LongSummary(t *testing.T) {
 	report := &advisor.Report{
 		Summary:               sb.String(),
 		TotalPotentialSavings: 100.0,
+		RightSizingSavings:    100.0,
 		Recommendations: []advisor.Recommendation{
 			{Title: "Test", Description: "desc", Severity: advisor.SeverityLow},
 		},

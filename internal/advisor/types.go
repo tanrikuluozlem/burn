@@ -28,6 +28,9 @@ type Report struct {
 	Recommendations       []Recommendation `json:"recommendations"`
 	Summary               string           `json:"summary"`
 	TotalPotentialSavings float64          `json:"total_potential_savings"`
+	SpotSavings           float64          `json:"spot_savings,omitempty"`
+	ConsolidationSavings  float64          `json:"consolidation_savings,omitempty"`
+	RightSizingSavings    float64          `json:"rightsizing_savings,omitempty"`
 	GeneratedAt           time.Time        `json:"generated_at"`
 	ModelUsed             string           `json:"model_used"`
 	TokensUsed            int              `json:"tokens_used"`

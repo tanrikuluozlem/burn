@@ -10,13 +10,13 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 	"github.com/tanrikuluozlem/burn/internal/collector"
 	ofmt "github.com/tanrikuluozlem/burn/internal/output"
 	"github.com/tanrikuluozlem/burn/internal/pricing"
 	"github.com/tanrikuluozlem/burn/internal/slack"
-	"github.com/spf13/cobra"
 )
 
 var validPeriod = regexp.MustCompile(`^\d{1,4}[smhdwy]$`)
@@ -111,9 +111,9 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 	// Custom pricing for on-prem nodes
 	if cpuPrice > 0 || ramPrice > 0 || gpuPrice > 0 || storagePrice > 0 {
 		cp := &pricing.CustomPricing{
-			CPUCostPerCoreHr:    cpuPrice,
-			RAMCostPerGiBHr:     ramPrice,
-			GPUCostPerHr:        gpuPrice,
+			CPUCostPerCoreHr:     cpuPrice,
+			RAMCostPerGiBHr:      ramPrice,
+			GPUCostPerHr:         gpuPrice,
 			StoragePricePerGiBMo: storagePrice,
 		}
 		if cp.CPUCostPerCoreHr == 0 {
@@ -478,7 +478,6 @@ func spotPricingSource(results []analyzer.SpotReadiness) string {
 	return "default estimate"
 }
 
-
 func outputAIReport(report *advisor.Report) {
 	fmt.Println("\nRECOMMENDATIONS")
 	fmt.Println("───────────────")
@@ -497,8 +496,14 @@ func outputAIReport(report *advisor.Report) {
 		fmt.Println()
 	}
 
-	if report.TotalPotentialSavings > 0 {
-		fmt.Printf("Largest optimization opportunity: $%.2f/mo\n", report.TotalPotentialSavings)
+	if report.RightSizingSavings > 0 {
+		fmt.Printf("Rightsizing allocation opportunity: $%.2f/mo\n", report.RightSizingSavings)
+	}
+	if report.SpotSavings > 0 {
+		fmt.Printf("Spot pricing opportunity: $%.2f/mo\n", report.SpotSavings)
+	}
+	if report.ConsolidationSavings > 0 {
+		fmt.Printf("Consolidation opportunity: $%.2f/mo\n", report.ConsolidationSavings)
 	}
 }
 

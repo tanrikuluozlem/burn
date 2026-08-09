@@ -7,64 +7,53 @@ import (
 )
 
 func TestCalculateSpotSavings(t *testing.T) {
-	discountRate := 0.79
-
 	tests := []struct {
 		name           string
-		nodes          []analyzer.NodeCost
+		spotSavings    float64
 		wantApplicable bool
 		wantSavings    float64
 	}{
 		{
-			name: "on-demand nodes with high idle - should recommend spot",
-			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60},
-				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.50},
-			},
+			name:           "eligible workloads with savings",
+			spotSavings:    36.43,
 			wantApplicable: true,
-			wantSavings:    158, // (100+100) * 0.79
+			wantSavings:    36.43,
 		},
 		{
-			name: "on-demand nodes with low idle - still applicable",
-			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.15},
-				{Name: "node-2", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.10},
-			},
-			wantApplicable: true,
-			wantSavings:    158,
-		},
-		{
-			name: "all spot nodes - not applicable",
-			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: true, MonthlyPrice: 21, IdlePercent: 0.60},
-				{Name: "node-2", IsSpot: true, MonthlyPrice: 21, IdlePercent: 0.50},
-			},
+			name:           "no spot-ready workloads",
+			spotSavings:    0,
 			wantApplicable: false,
-			wantSavings:    0,
-		},
-		{
-			name: "mixed spot and on-demand",
-			nodes: []analyzer.NodeCost{
-				{Name: "node-1", IsSpot: false, MonthlyPrice: 100, IdlePercent: 0.60},
-				{Name: "node-2", IsSpot: true, MonthlyPrice: 21, IdlePercent: 0.50},
-			},
-			wantApplicable: true,
-			wantSavings:    79, // only on-demand: 100 * 0.79
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			report := &analyzer.CostReport{Nodes: tt.nodes}
-			result := calculateSpotSavings(report, discountRate)
+			report := &analyzer.CostReport{SpotSavings: tt.spotSavings}
+			result := calculateSpotSavings(report)
 
 			if result.Applicable != tt.wantApplicable {
 				t.Errorf("Applicable = %v, want %v", result.Applicable, tt.wantApplicable)
 			}
-			if tt.wantSavings > 0 && result.MonthlySavings != tt.wantSavings {
+			if tt.wantApplicable && result.MonthlySavings != tt.wantSavings {
 				t.Errorf("MonthlySavings = %v, want %v", result.MonthlySavings, tt.wantSavings)
 			}
 		})
+	}
+}
+
+func TestSpotSavingsUsesEligibleWorkloads(t *testing.T) {
+	// SpotConversion must equal report.SpotSavings, NOT fleet-level node cost × discount
+	report := &analyzer.CostReport{
+		SpotSavings: 36.43,
+		Nodes: []analyzer.NodeCost{
+			{Name: "node-1", IsSpot: false, MonthlyPrice: 100},
+			{Name: "node-2", IsSpot: false, MonthlyPrice: 100},
+		},
+	}
+	result := calculateSpotSavings(report)
+
+	if result.MonthlySavings != 36.43 {
+		t.Errorf("SpotConversion = %.2f, want 36.43 (eligible workloads only, not %.2f fleet-level)", result.MonthlySavings, 200*0.79)
 	}
 }
 

@@ -36,6 +36,8 @@ type NodeInfo struct {
 type PodInfo struct {
 	Name           string
 	Namespace      string
+	OwnerKind      string // resolved controller: "Deployment", "StatefulSet", "DaemonSet"
+	OwnerName      string
 	CPURequest     int64
 	CPULimit       int64
 	MemoryRequest  int64

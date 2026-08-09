@@ -183,13 +183,16 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		log.Printf("warning: large cluster detected (%d nodes, %d pods) — analysis may take longer", len(nodeItems), len(podItems))
 	}
 
+	// Build ReplicaSet owner index for Deployment ownership resolution
+	rsOwners := c.buildRSOwnerIndex(ctx)
+
 	// group pods by node
 	podsByNode := make(map[string][]PodInfo)
 	for _, pod := range podItems {
 		if pod.Spec.NodeName == "" {
 			continue
 		}
-		podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], parsePod(pod))
+		podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], parsePod(pod, rsOwners))
 	}
 
 	var nodeInfos []NodeInfo
@@ -568,7 +571,37 @@ func extractIPFromNodeName(name string) string {
 	return name
 }
 
-func parsePod(pod corev1.Pod) PodInfo {
+type rsOwner struct {
+	Kind string
+	Name string
+}
+
+// buildRSOwnerIndex indexes ReplicaSet controller owners for Deployment resolution.
+func (c *Collector) buildRSOwnerIndex(ctx context.Context) map[string]rsOwner {
+	index := make(map[string]rsOwner)
+	opts := metav1.ListOptions{Limit: pageSize}
+	for {
+		list, err := c.client.AppsV1().ReplicaSets(c.namespace).List(ctx, opts)
+		if err != nil {
+			log.Printf("warning: failed to list ReplicaSets: %v", err)
+			return index
+		}
+		for _, rs := range list.Items {
+			owner := metav1.GetControllerOfNoCopy(&rs)
+			if owner != nil && owner.Kind == "Deployment" {
+				key := rs.Namespace + "/" + rs.Name
+				index[key] = rsOwner{Kind: owner.Kind, Name: owner.Name}
+			}
+		}
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
+	}
+	return index
+}
+
+func parsePod(pod corev1.Pod, rsOwners map[string]rsOwner) PodInfo {
 	var cpuReq, cpuLim, memReq, memLim, gpuReq int64
 
 	for _, container := range pod.Spec.Containers {
@@ -581,14 +614,37 @@ func parsePod(pod corev1.Pod) PodInfo {
 		}
 	}
 
+	ownerKind, ownerName := resolveWorkloadOwner(&pod, rsOwners)
+
 	return PodInfo{
 		Name:          pod.Name,
 		Namespace:     pod.Namespace,
+		OwnerKind:     ownerKind,
+		OwnerName:     ownerName,
 		CPURequest:    cpuReq,
 		CPULimit:      cpuLim,
 		MemoryRequest: memReq,
 		MemoryLimit:   memLim,
 		GPURequest:    gpuReq,
+	}
+}
+
+func resolveWorkloadOwner(pod *corev1.Pod, rsOwners map[string]rsOwner) (string, string) {
+	ref := metav1.GetControllerOfNoCopy(pod)
+	if ref == nil {
+		return "", ""
+	}
+	switch ref.Kind {
+	case "ReplicaSet":
+		key := pod.Namespace + "/" + ref.Name
+		if owner, ok := rsOwners[key]; ok {
+			return owner.Kind, owner.Name
+		}
+		return "", ""
+	case "StatefulSet", "DaemonSet":
+		return ref.Kind, ref.Name
+	default:
+		return "", ""
 	}
 }
 

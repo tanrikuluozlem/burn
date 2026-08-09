@@ -12,20 +12,20 @@ type CostReport struct {
 	TotalIdleCost   float64 // monthly idle cost
 	Nodes           []NodeCost
 	InefficientPods []PodEfficiency
-	Namespaces      []NamespaceCost   `json:"namespaces,omitempty"`
-	AllPods         []PodEfficiency   `json:"-"`
+	Namespaces      []NamespaceCost `json:"namespaces,omitempty"`
+	AllPods         []PodEfficiency `json:"-"`
 	WasteAnalysis   WasteAnalysis
 	MetricsSource   string // "prometheus" or "requests"
 	Period          string `json:"period,omitempty"`
 
 	// Non-compute costs
-	PVCosts          []PVCost     `json:"pv_costs,omitempty"`
-	LBCosts          []LBCost     `json:"lb_costs,omitempty"`
-	NetworkCost      NetworkCost  `json:"network_cost,omitempty"`
-	TotalPVCost      float64      `json:"total_pv_cost,omitempty"`
-	TotalLBCost      float64      `json:"total_lb_cost,omitempty"`
-	TotalNetworkCost float64      `json:"total_network_cost,omitempty"`
-	TotalMonthlyCost float64      `json:"total_monthly_cost"` // compute + storage + LB + network
+	PVCosts          []PVCost    `json:"pv_costs,omitempty"`
+	LBCosts          []LBCost    `json:"lb_costs,omitempty"`
+	NetworkCost      NetworkCost `json:"network_cost,omitempty"`
+	TotalPVCost      float64     `json:"total_pv_cost,omitempty"`
+	TotalLBCost      float64     `json:"total_lb_cost,omitempty"`
+	TotalNetworkCost float64     `json:"total_network_cost,omitempty"`
+	TotalMonthlyCost float64     `json:"total_monthly_cost"` // compute + storage + LB + network
 
 	// Spot readiness
 	SpotReadiness []SpotReadiness `json:"spot_readiness,omitempty"`
@@ -60,21 +60,23 @@ type NodeCost struct {
 }
 
 type PodEfficiency struct {
-	Name          string
-	Namespace     string
-	CPURequest    int64   // millicores
-	CPUUsage      float64 // cores (from Prometheus)
-	CPUEfficiency float64 // usage/request ratio (0-1+)
-	MemRequest    int64   // bytes
-	MemUsage      int64   // bytes (from Prometheus)
-	MemEfficiency float64 // usage/request ratio (0-1+)
+	Name           string
+	Namespace      string
+	OwnerKind      string  `json:"-"`
+	OwnerName      string  `json:"-"`
+	CPURequest     int64   // millicores
+	CPUUsage       float64 // cores (from Prometheus)
+	CPUEfficiency  float64 // usage/request ratio (0-1+)
+	MemRequest     int64   // bytes
+	MemUsage       int64   // bytes (from Prometheus)
+	MemEfficiency  float64 // usage/request ratio (0-1+)
 	MonthlyCost    float64 // estimated cost based on resource allocation
 	CPUCost        float64 `json:"cpu_cost"`
 	RAMCost        float64 `json:"ram_cost"`
 	GPUCost        float64 `json:"gpu_cost,omitempty"`
 	GPURequest     int64   `json:"gpu_request,omitempty"`
-	CPUP95Usage    float64 `json:"cpu_p95_usage,omitempty"`   // p95 CPU usage in cores
-	MemoryP95Usage int64   `json:"mem_p95_usage,omitempty"`   // p95 memory usage in bytes
+	CPUP95Usage    float64 `json:"cpu_p95_usage,omitempty"` // p95 CPU usage in cores
+	MemoryP95Usage int64   `json:"mem_p95_usage,omitempty"` // p95 memory usage in bytes
 }
 
 type NamespaceCost struct {

@@ -43,9 +43,11 @@ func (m *mockPricing) GetNodePricing(_ context.Context, node collector.NodeInfo)
 	}, nil
 }
 
-func (m *mockPricing) GetStoragePricePerGiBMonth(_ context.Context, storageClass string) float64 { return 0.10 }
-func (m *mockPricing) GetLoadBalancerPricePerHour() float64                    { return 0.0225 }
-func (m *mockPricing) GetNetworkEgressPricePerGiB() float64                    { return 0.01 }
+func (m *mockPricing) GetStoragePricePerGiBMonth(_ context.Context, storageClass string) float64 {
+	return 0.10
+}
+func (m *mockPricing) GetLoadBalancerPricePerHour() float64 { return 0.0225 }
+func (m *mockPricing) GetNetworkEgressPricePerGiB() float64 { return 0.01 }
 func (m *mockPricing) GetSpotDiscount(_ context.Context, _, _ string) pricing.SpotDiscount {
 	return pricing.SpotDiscount{Discount: 0.65, InterruptionRate: -1, Source: "default"}
 }
@@ -128,13 +130,13 @@ func TestAnalyzeWithPrometheus(t *testing.T) {
 			Region:         "us-east-1",
 			CPUAllocatable: 4000,                   // 4 cores in millicores
 			MemAllocatable: 8 * 1024 * 1024 * 1024, // 8GB
-			CPUUsage:       2.0,                     // 2 cores from Prometheus
-			MemoryUsage:    4 * 1024 * 1024 * 1024,  // 4GB from Prometheus
+			CPUUsage:       2.0,                    // 2 cores from Prometheus
+			MemoryUsage:    4 * 1024 * 1024 * 1024, // 4GB from Prometheus
 			Pods: []collector.PodInfo{
 				{
 					Name:          "app",
 					Namespace:     "default",
-					CPURequest:    2000,                    // 2 cores
+					CPURequest:    2000,                   // 2 cores
 					MemoryRequest: 4 * 1024 * 1024 * 1024, // 4GB
 					CPUUsage:      2.0,
 					MemoryUsage:   4 * 1024 * 1024 * 1024,
@@ -228,18 +230,18 @@ func TestPodEfficiency(t *testing.T) {
 				{
 					Name:          "nginx",
 					Namespace:     "default",
-					CPURequest:    1000,                    // 1 core
-					MemoryRequest: 4 * 1024 * 1024 * 1024,  // 4GB
-					CPUUsage:      0.1,                     // 0.1 cores actual
-					MemoryUsage:   1 * 1024 * 1024 * 1024,  // 1GB actual
+					CPURequest:    1000,                   // 1 core
+					MemoryRequest: 4 * 1024 * 1024 * 1024, // 4GB
+					CPUUsage:      0.1,                    // 0.1 cores actual
+					MemoryUsage:   1 * 1024 * 1024 * 1024, // 1GB actual
 				},
 				{
 					Name:          "redis",
 					Namespace:     "default",
-					CPURequest:    500,                     // 0.5 core
-					MemoryRequest: 2 * 1024 * 1024 * 1024,  // 2GB
-					CPUUsage:      0.4,                     // 0.4 cores actual
-					MemoryUsage:   1 * 1024 * 1024 * 1024,  // 1GB actual
+					CPURequest:    500,                    // 0.5 core
+					MemoryRequest: 2 * 1024 * 1024 * 1024, // 2GB
+					CPUUsage:      0.4,                    // 0.4 cores actual
+					MemoryUsage:   1 * 1024 * 1024 * 1024, // 1GB actual
 				},
 			},
 		}},
@@ -408,10 +410,10 @@ func TestMaxRequestUsage(t *testing.T) {
 				{
 					Name:          "burst-app",
 					Namespace:     "default",
-					CPURequest:    1000,                    // requests 1 core
+					CPURequest:    1000,                   // requests 1 core
 					MemoryRequest: 2 * 1024 * 1024 * 1024, // requests 2 GiB
-					CPUUsage:      3.0,                     // actually uses 3 cores (burst)
-					MemoryUsage:   6 * 1024 * 1024 * 1024,  // actually uses 6 GiB (burst)
+					CPUUsage:      3.0,                    // actually uses 3 cores (burst)
+					MemoryUsage:   6 * 1024 * 1024 * 1024, // actually uses 6 GiB (burst)
 				},
 			},
 		}},
@@ -463,7 +465,7 @@ func TestPerResourceIdle(t *testing.T) {
 				{
 					Name:          "mem-heavy",
 					Namespace:     "default",
-					CPURequest:    1000,                    // 1 core (25% of 4)
+					CPURequest:    1000,                   // 1 core (25% of 4)
 					MemoryRequest: 6 * 1024 * 1024 * 1024, // 6 GiB (75% of 8)
 				},
 			},
@@ -641,5 +643,254 @@ func TestTotalMonthlyCostIncludes(t *testing.T) {
 	expectedTotal := report.MonthlyCost + report.TotalPVCost + report.TotalLBCost
 	if !floatEquals(report.TotalMonthlyCost, expectedTotal) {
 		t.Errorf("TotalMonthlyCost = %.2f, expected %.2f", report.TotalMonthlyCost, expectedTotal)
+	}
+}
+
+func TestAssignWorkloadCosts_Heterogeneous(t *testing.T) {
+	pods := []PodEfficiency{
+		{Name: "big-pod-abc", Namespace: "app", OwnerKind: "Deployment", OwnerName: "big", MonthlyCost: 80},
+		{Name: "tiny-pod-xyz", Namespace: "app", OwnerKind: "Deployment", OwnerName: "tiny", MonthlyCost: 20},
+	}
+	namespaces := []NamespaceCost{{Name: "app", MonthlyCost: 100, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "big", Namespace: "app", Kind: "Deployment", Replicas: 1},
+		{Name: "tiny", Namespace: "app", Kind: "Deployment", Replicas: 1},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 80) {
+		t.Errorf("big = %.2f, want 80", workloads[0].MonthlyCost)
+	}
+	if !floatEquals(workloads[1].MonthlyCost, 20) {
+		t.Errorf("tiny = %.2f, want 20", workloads[1].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_MultiReplica(t *testing.T) {
+	pods := []PodEfficiency{
+		{Name: "web-aaa", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 15},
+		{Name: "web-bbb", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 15},
+		{Name: "web-ccc", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 15},
+	}
+	namespaces := []NamespaceCost{{Name: "prod", MonthlyCost: 45, PodCount: 3}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "web", Namespace: "prod", Kind: "Deployment", Replicas: 3},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 45) {
+		t.Errorf("web = %.2f, want 45", workloads[0].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_Homogeneous(t *testing.T) {
+	// When all pods have equal cost, result matches the old namespace-average behavior
+	pods := []PodEfficiency{
+		{Name: "a-111", Namespace: "ns", OwnerKind: "Deployment", OwnerName: "a", MonthlyCost: 25},
+		{Name: "b-222", Namespace: "ns", OwnerKind: "Deployment", OwnerName: "b", MonthlyCost: 25},
+	}
+	namespaces := []NamespaceCost{{Name: "ns", MonthlyCost: 50, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "a", Namespace: "ns", Kind: "Deployment", Replicas: 1},
+		{Name: "b", Namespace: "ns", Kind: "Deployment", Replicas: 1},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 25) {
+		t.Errorf("a = %.2f, want 25", workloads[0].MonthlyCost)
+	}
+	if !floatEquals(workloads[1].MonthlyCost, 25) {
+		t.Errorf("b = %.2f, want 25", workloads[1].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_StatefulSet(t *testing.T) {
+	pods := []PodEfficiency{
+		{Name: "db-0", Namespace: "data", OwnerKind: "StatefulSet", OwnerName: "db", MonthlyCost: 40},
+		{Name: "db-1", Namespace: "data", OwnerKind: "StatefulSet", OwnerName: "db", MonthlyCost: 40},
+	}
+	namespaces := []NamespaceCost{{Name: "data", MonthlyCost: 80, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "db", Namespace: "data", Kind: "StatefulSet", Replicas: 2},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 80) {
+		t.Errorf("db = %.2f, want 80", workloads[0].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_DaemonSet(t *testing.T) {
+	pods := []PodEfficiency{
+		{Name: "agent-a", Namespace: "sys", OwnerKind: "DaemonSet", OwnerName: "agent", MonthlyCost: 5},
+		{Name: "agent-b", Namespace: "sys", OwnerKind: "DaemonSet", OwnerName: "agent", MonthlyCost: 5},
+	}
+	namespaces := []NamespaceCost{{Name: "sys", MonthlyCost: 10, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "agent", Namespace: "sys", Kind: "DaemonSet", Replicas: 2},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 10) {
+		t.Errorf("agent = %.2f, want 10", workloads[0].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_KindCollision(t *testing.T) {
+	pods := []PodEfficiency{
+		{Name: "api-deploy-aaa", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api", MonthlyCost: 60},
+		{Name: "api-sts-0", Namespace: "prod", OwnerKind: "StatefulSet", OwnerName: "api", MonthlyCost: 30},
+	}
+	namespaces := []NamespaceCost{{Name: "prod", MonthlyCost: 90, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "api", Namespace: "prod", Kind: "Deployment", Replicas: 1},
+		{Name: "api", Namespace: "prod", Kind: "StatefulSet", Replicas: 1},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 60) {
+		t.Errorf("Deployment/api = %.2f, want 60", workloads[0].MonthlyCost)
+	}
+	if !floatEquals(workloads[1].MonthlyCost, 30) {
+		t.Errorf("StatefulSet/api = %.2f, want 30", workloads[1].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_MixedResolution(t *testing.T) {
+	// web resolved = $80, worker unresolved = residual $20
+	pods := []PodEfficiency{
+		{Name: "web-aaa", Namespace: "app", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 80},
+		{Name: "worker-bbb", Namespace: "app", OwnerKind: "", OwnerName: "", MonthlyCost: 20},
+	}
+	namespaces := []NamespaceCost{{Name: "app", MonthlyCost: 100, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "web", Namespace: "app", Kind: "Deployment", Replicas: 1},
+		{Name: "worker", Namespace: "app", Kind: "Deployment", Replicas: 1},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 80) {
+		t.Errorf("web = %.2f, want 80", workloads[0].MonthlyCost)
+	}
+	if !floatEquals(workloads[1].MonthlyCost, 20) {
+		t.Errorf("worker = %.2f, want 20 (residual)", workloads[1].MonthlyCost)
+	}
+	total := workloads[0].MonthlyCost + workloads[1].MonthlyCost
+	if !floatEquals(total, 100) {
+		t.Errorf("total = %.2f, want 100 (no double-count)", total)
+	}
+}
+
+func TestAssignWorkloadCosts_MultipleUnresolved(t *testing.T) {
+	// residual $40 split by replicas: A(1) gets $10, B(3) gets $30
+	pods := []PodEfficiency{
+		{Name: "resolved-aaa", Namespace: "ns", OwnerKind: "Deployment", OwnerName: "resolved", MonthlyCost: 60},
+	}
+	namespaces := []NamespaceCost{{Name: "ns", MonthlyCost: 100, PodCount: 5}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "resolved", Namespace: "ns", Kind: "Deployment", Replicas: 1},
+		{Name: "unres-a", Namespace: "ns", Kind: "Deployment", Replicas: 1},
+		{Name: "unres-b", Namespace: "ns", Kind: "Deployment", Replicas: 3},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 60) {
+		t.Errorf("resolved = %.2f, want 60", workloads[0].MonthlyCost)
+	}
+	if !floatEquals(workloads[1].MonthlyCost, 10) {
+		t.Errorf("unres-a = %.2f, want 10", workloads[1].MonthlyCost)
+	}
+	if !floatEquals(workloads[2].MonthlyCost, 30) {
+		t.Errorf("unres-b = %.2f, want 30", workloads[2].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_AllUnresolved(t *testing.T) {
+	// No ownership data: split full namespace cost by replicas
+	pods := []PodEfficiency{
+		{Name: "pod-a", Namespace: "ns", MonthlyCost: 60},
+		{Name: "pod-b", Namespace: "ns", MonthlyCost: 40},
+	}
+	namespaces := []NamespaceCost{{Name: "ns", MonthlyCost: 100, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "svc-a", Namespace: "ns", Kind: "Deployment", Replicas: 2},
+		{Name: "svc-b", Namespace: "ns", Kind: "Deployment", Replicas: 2},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	// 4 total replicas, each gets $25
+	if !floatEquals(workloads[0].MonthlyCost, 50) {
+		t.Errorf("svc-a = %.2f, want 50", workloads[0].MonthlyCost)
+	}
+	if !floatEquals(workloads[1].MonthlyCost, 50) {
+		t.Errorf("svc-b = %.2f, want 50", workloads[1].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_ScaledToZero(t *testing.T) {
+	pods := []PodEfficiency{
+		{Name: "active-aaa", Namespace: "ns", OwnerKind: "Deployment", OwnerName: "active", MonthlyCost: 100},
+	}
+	namespaces := []NamespaceCost{{Name: "ns", MonthlyCost: 100, PodCount: 1}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "active", Namespace: "ns", Kind: "Deployment", Replicas: 1},
+		{Name: "idle", Namespace: "ns", Kind: "Deployment", Replicas: 0},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	if !floatEquals(workloads[0].MonthlyCost, 100) {
+		t.Errorf("active = %.2f, want 100", workloads[0].MonthlyCost)
+	}
+	if workloads[1].MonthlyCost != 0 {
+		t.Errorf("idle = %.2f, want 0", workloads[1].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_RollingDeployment(t *testing.T) {
+	// During rollout: 2 old pods + 2 new pods, both owned by same Deployment
+	pods := []PodEfficiency{
+		{Name: "web-old-aaa", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 10},
+		{Name: "web-old-bbb", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 10},
+		{Name: "web-new-ccc", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 12},
+		{Name: "web-new-ddd", Namespace: "prod", OwnerKind: "Deployment", OwnerName: "web", MonthlyCost: 12},
+	}
+	namespaces := []NamespaceCost{{Name: "prod", MonthlyCost: 44, PodCount: 4}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "web", Namespace: "prod", Kind: "Deployment", Replicas: 3},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	// All 4 pods sum to the deployment
+	if !floatEquals(workloads[0].MonthlyCost, 44) {
+		t.Errorf("web = %.2f, want 44 (all pods during rollout)", workloads[0].MonthlyCost)
+	}
+}
+
+func TestAssignWorkloadCosts_SpotSavingsRegression(t *testing.T) {
+	// Verify corrected costs flow through to SpotSavings
+	pods := []PodEfficiency{
+		{Name: "big-aaa", Namespace: "app", OwnerKind: "Deployment", OwnerName: "big", MonthlyCost: 80},
+		{Name: "tiny-bbb", Namespace: "app", OwnerKind: "Deployment", OwnerName: "tiny", MonthlyCost: 20},
+	}
+	namespaces := []NamespaceCost{{Name: "app", MonthlyCost: 100, PodCount: 2}}
+	workloads := []collector.WorkloadInfo{
+		{Name: "big", Namespace: "app", Kind: "Deployment", Replicas: 1},
+		{Name: "tiny", Namespace: "app", Kind: "Deployment", Replicas: 2},
+	}
+	assignWorkloadCosts(workloads, pods, namespaces)
+
+	results := CheckSpotReadiness(workloads)
+	// Only "tiny" is spot-ready (2 replicas), "big" is not (1 replica)
+	for i := range results {
+		if results[i].Status == "spot-ready" {
+			results[i].Discount = 0.55
+		}
+	}
+	savings := SpotSavings(results)
+
+	// big: 1 replica → not-ready. tiny: 2 replicas → spot-ready, cost=$20
+	// savings = $20 * 0.55 = $11
+	if !floatEquals(savings, 11.0) {
+		t.Errorf("SpotSavings = %.2f, want 11.00", savings)
 	}
 }

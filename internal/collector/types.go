@@ -34,19 +34,21 @@ type NodeInfo struct {
 }
 
 type PodInfo struct {
-	Name           string
-	Namespace      string
-	OwnerKind      string // resolved controller: "Deployment", "StatefulSet", "DaemonSet"
-	OwnerName      string
-	CPURequest     int64
-	CPULimit       int64
-	MemoryRequest  int64
-	MemoryLimit    int64
-	GPURequest     int64 // nvidia.com/gpu
-	CPUUsage       float64
-	MemoryUsage    int64
-	CPUP95Usage    float64 // p95 CPU usage in cores (over analysis period)
-	MemoryP95Usage int64   // p95 memory usage in bytes (over analysis period)
+	Name            string
+	Namespace       string
+	OwnerKind       string // resolved controller: "Deployment", "StatefulSet", "DaemonSet"
+	OwnerName       string
+	CPURequest      int64
+	CPULimit        int64
+	MemoryRequest   int64
+	MemoryLimit     int64
+	GPURequest      int64 // nvidia.com/gpu
+	CPUUsage        float64
+	MemoryUsage     int64
+	CPUP95Usage     float64 // p95 CPU usage in cores (over analysis period)
+	MemoryP95Usage  int64   // p95 memory usage in bytes (over analysis period)
+	CPUP95Available bool    // true if P95 query returned data for this pod
+	MemP95Available bool    // true if P95 query returned data for this pod
 }
 
 type PVCInfo struct {

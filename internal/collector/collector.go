@@ -456,9 +456,11 @@ func (c *Collector) enrichWithMetrics(ctx context.Context, nodes []NodeInfo) {
 			}
 			if cpu, ok := podCPUP95[key]; ok {
 				pod.CPUP95Usage = cpu
+				pod.CPUP95Available = true
 			}
 			if mem, ok := podMemP95[key]; ok {
 				pod.MemoryP95Usage = mem
+				pod.MemP95Available = true
 			}
 		}
 	}

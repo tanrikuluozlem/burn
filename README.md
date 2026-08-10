@@ -16,14 +16,15 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 ## Why burn
 
 - **Zero setup**: `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
-- **Full cost coverage**: Compute, storage, load balancers, and GPU costs with real-time cloud pricing.
+- **Full cost coverage**: Compute, storage, load balancers, and GPU costs with cloud pricing.
 - **Billing reconciliation**: Verify cost estimates against your real AWS CUR or Azure Cost Management bill. Per node, per disk, per load balancer.
 - **SP/RI/Spot detection**: See which nodes have Savings Plan, Reserved Instance, or Spot coverage. Coverage gaps show real RI savings from cloud pricing APIs.
+- **Optimization insights**: Find rightsizing, Spot, and consolidation opportunities, using historical P95 usage when available.
 - **Orphaned resource detection**: Find disks and load balancers you're paying for but not using.
-- **AI-powered**: Ask questions in plain English, get kubectl commands you can copy-paste.
+- **AI-powered**: Ask questions in plain English, get recommendations with investigation commands.
 - **Slack-native**: `/burn` for instant cost reports. `/burn reconcile` for billing verification. `/burn ask "..."` for AI analysis.
 - **Cloud + on-prem**: Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters. Billing reconciliation supports AWS and Azure.
-- **Spot readiness**: Identifies which workloads can safely move to spot instances with real-time discount and interruption rate.
+- **Spot readiness**: Identifies which workloads pass spot-readiness checks, with discount and interruption data per instance type.
 - **Ingress LB detection**: Detects load balancers from both Services and Ingress resources, with hostname deduplication.
 - **MCP server**: Use burn from Claude Code, Cursor, or any MCP-compatible AI agent. Ask questions, get cost data.
 - **Time-aware**: `--period 7d` for weekly averages instead of point-in-time snapshots.
@@ -132,7 +133,7 @@ Verified against AWS Cost Explorer and Azure Cost Management portal.
 burn reconcile --provider aws --ai
 ```
 
-Shows why your estimated and actual costs differ, with commands to fix each issue.
+Shows why your estimated and actual costs differ, with commands to investigate each issue.
 
 ### Automation
 
@@ -145,7 +146,7 @@ burn reconcile --provider aws -o json | jq .total_actual_cost
 
 ![spot readiness](assets/demo-spot.gif)
 
-Real-time spot discount and interruption rate per instance type.
+Spot discount and interruption data per instance type.
 
 ## AI recommendations
 
@@ -155,40 +156,6 @@ Get cluster-wide or namespace-specific recommendations:
 burn analyze --prometheus http://prometheus:9090 --period 7d --ai
 burn analyze --prometheus http://prometheus:9090 --namespace app-backend --ai
 burn ask --prometheus http://prometheus:9090 "why is argocd so expensive?"
-```
-
-Example: `burn analyze --namespace app-backend --period 7d --ai`
-
-```
-NAMESPACE: app-backend (3 pods, $17.19/mo)
-──────────────────────────────────
-POD                      CPU REQ→USED  MEM REQ→USED   COST/MO
-app-backend-deploy-0001  200m → <1m    256Mi → 9Mi    $5.73
-app-backend-deploy-0002  200m → <1m    256Mi → 9Mi    $5.73
-app-backend-deploy-0003  200m → <1m    256Mi → 128Mi  $5.73
-
-RECOMMENDATIONS
-───────────────
-The app-backend namespace costs $17.19/mo across 3 pods, but CPU efficiency
-is critically low at ~0.1% — pods request 200m CPU each while p95 usage
-is under 0.31m.
-
-[!!] 1. Rightsize CPU Requests using p95 data
-   app-backend-deploy-0001: p95 CPU is 0.22m → recommend 1m (1.5x p95)
-   app-backend-deploy-0002: p95 CPU is 0.30m → recommend 1m (1.5x p95)
-   app-backend-deploy-0003: p95 MEM is 128Mi (50% eff) — leave as-is
-   $ kubectl set resources deployment app-backend -n app-backend \
-     --requests=cpu=1m,memory=14Mi --limits=cpu=200m,memory=256Mi
-
-[!!] 2. app-backend-ingress LB ($19.71/mo) costs more than the namespace
-   The load balancer alone exceeds the $17.19/mo compute cost.
-   If internal-only, switch to ClusterIP to eliminate the LB cost.
-   $ kubectl patch svc app-backend-ingress -n app-backend \
-     -p '{"spec": {"type": "ClusterIP"}}'
-
-[!] 3. Enable VPA in Recommend Mode
-   Prevent over-provisioning from recurring with continuous p95 tracking.
-   $ kubectl apply -f vpa-app-backend.yaml
 ```
 
 ### Ask questions in plain English
@@ -211,7 +178,7 @@ burn serve --port 8080 --prometheus http://prometheus:9090 --period 7d
 | `/burn ns argocd` | Pod-level breakdown for a namespace |
 | `/burn reconcile --provider aws` | Estimated vs actual billing, SP/RI/Spot detection |
 | `/burn reconcile --provider azure` | Estimated vs actual billing, SP/RI/Spot detection |
-| `/burn ask "what is the single biggest waste?"` | AI analysis with kubectl commands |
+| `/burn ask "what is the single biggest waste?"` | AI analysis with investigation commands |
 
 ![Slack AI](assets/slack-ask.png)
 

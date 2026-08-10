@@ -215,7 +215,7 @@ func runAnalyze(cmd *cobra.Command, _ []string) error {
 		}
 
 		sc := slack.NewWebhookClient(webhook)
-		if err := sc.Send(ctx, slack.FormatCostReport(report)); err != nil {
+		if err := sc.Send(ctx, slack.FormatCostReport(report, aiReport != nil)); err != nil {
 			return fmt.Errorf("failed to send cost report to Slack: %w", err)
 		}
 		// Send AI report only if we have one

@@ -51,6 +51,11 @@ func TestAskPromptConstraints(t *testing.T) {
 		{"observation vs inference", "Distinguish observation from inference"},
 		{"PDB not Spot protection", "do NOT prevent cloud-provider Spot reclamation"},
 		{"no assumed cluster state", "Do not assume cluster state"},
+		{"idle node not auto-removable", "not automatically safe to drain or remove"},
+		{"idle cost not realizable savings", "NOT the same as realizable savings"},
+		{"no unsupported causal claims", "Do not claim that over-provisioned pod requests are causing nodes to remain running"},
+		{"read-only commands", "read-only investigation commands"},
+		{"no mutating commands", "Do not generate mutating commands"},
 	}
 
 	for _, c := range checks {

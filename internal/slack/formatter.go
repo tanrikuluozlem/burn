@@ -12,7 +12,7 @@ import (
 
 const maxBlockText = 2900
 
-func FormatCostReport(report *analyzer.CostReport) *Message {
+func FormatCostReport(report *analyzer.CostReport, suppressLegacySavings bool) *Message {
 	idlePercent := 0.0
 	if report.MonthlyCost > 0 {
 		idlePercent = (report.TotalIdleCost / report.MonthlyCost) * 100
@@ -148,8 +148,7 @@ func FormatCostReport(report *analyzer.CostReport) *Message {
 		},
 	})
 
-	// Potential savings
-	if report.WasteAnalysis.PotentialSavings > 0 {
+	if report.WasteAnalysis.PotentialSavings > 0 && !suppressLegacySavings {
 		blocks = append(blocks, Block{
 			Type: "section",
 			Text: &TextObject{

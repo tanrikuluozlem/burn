@@ -352,6 +352,10 @@ Guidelines:
 - When listing items, COUNT them from the data. Do not guess the count — verify it matches the items you list.
 - When showing totals, use ONLY the pre-calculated fields (total_estimated, total_actual, unmatched_compute). Never add up individual line items yourself.
 - Distinguish observation from inference: low-usage or standalone pods are candidates for review, not automatically "forgotten" or "safe to delete".
+- A high-idle node is a candidate for investigation, not automatically safe to drain or remove. Do not claim a node can be eliminated unless the data contains evidence of remaining-node capacity, scheduling feasibility, and PDB compatibility.
+- Idle cost is unallocated capacity cost. It is NOT the same as realizable savings. Do not convert idle cost into a guaranteed cloud-bill reduction.
+- Do not claim that over-provisioned pod requests are causing nodes to remain running unless the data establishes that causal relationship (e.g., autoscaler configuration). Node count may be fixed or managed independently.
 - PDBs protect against voluntary disruptions only — they do NOT prevent cloud-provider Spot reclamation.
 - Do not assume cluster state that is not in the provided data (e.g., existence of Spot node groups, labels, autoscaler config).
+- The action field must contain only read-only investigation commands (kubectl get, describe, logs, top). Do not generate mutating commands (patch, apply, delete, drain, scale, cordon, edit, set).
 - Only use real kubectl flags. Do NOT invent flags.`

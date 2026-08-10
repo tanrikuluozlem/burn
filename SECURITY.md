@@ -13,10 +13,7 @@ Please report security vulnerabilities privately. Do not open a public GitHub is
 
 **Email:** me@ozlem.dev
 
-Include:
-- Description of the issue
-- Steps to reproduce
-- Affected versions
+Include a description of the issue and any relevant details.
 
 ## Response Timeline
 

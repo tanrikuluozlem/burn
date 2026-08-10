@@ -17,7 +17,6 @@ Include:
 - Description of the issue
 - Steps to reproduce
 - Affected versions
-- Suggested fix if available
 
 ## Response Timeline
 
@@ -42,6 +41,8 @@ Burn supports multiple optional integration modes. Core CLI commands (`burn anal
 ### CLI AI Analysis
 
 AI-enhanced analysis is enabled explicitly with the `--ai` flag and requires `ANTHROPIC_API_KEY`. When enabled, burn sends cost data to the Anthropic API including node names, pod names, namespace names, instance types, regions, and cost metrics. With `reconcile --ai`, billing reconciliation details including disk volume IDs, load balancer names, and coverage gap data are also sent.
+
+`burn ask` is itself an AI command and always requires `ANTHROPIC_API_KEY`. It sends the same cluster cost context as `analyze --ai`. When billing reconciliation environment variables are configured (`CUR_DATABASE` or `AZURE_SUBSCRIPTION_ID`), `burn ask` also includes reconciliation context such as instance identifiers, disk volume IDs, load balancer names, and coverage gap data.
 
 It does not send AWS account IDs, Azure subscription IDs, API keys, or credentials.
 

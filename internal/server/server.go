@@ -211,7 +211,7 @@ func (s *Server) processSlackCommand(text, responseURL string) {
 	case text == "" || text == "analyze":
 		response, err = s.handleAnalyze(ctx)
 	default:
-		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn — cost summary\n  /burn ns <name> — pod details\n  /burn ask \"question\" — AI analysis\n  /burn reconcile — AWS CUR reconciliation\n  /burn reconcile --provider azure --azure-subscription <id>\n  /burn reconcile --days 7 --data-delay 24 --cost-type amortized", text)
+		response = fmt.Sprintf("Unknown command: %s\n\nUsage:\n  /burn — cost summary\n  /burn ns <name> — pod details\n  /burn ask \"question\" — AI analysis\n  /burn reconcile — AWS CUR reconciliation\n  /burn reconcile --provider azure\n  /burn reconcile --days 7 --data-delay 24 --cost-type amortized", text)
 	}
 
 	if err != nil {
@@ -321,59 +321,72 @@ func (s *Server) handleAnalyze(ctx context.Context) (string, error) {
 	return summary, nil
 }
 
-func (s *Server) handleReconcile(ctx context.Context, text string) (string, error) {
-	provider := "aws"
-	azureSubscription := ""
-	days := 7
-	dataDelayHours := 48
-	costType := "amortized"
+type reconcileArgs struct {
+	provider       string
+	days           int
+	dataDelayHours int
+	costType       string
+}
 
+func parseReconcileArgs(text string) reconcileArgs {
+	ra := reconcileArgs{
+		provider:       "aws",
+		days:           7,
+		dataDelayHours: 48,
+		costType:       "amortized",
+	}
 	args := strings.Fields(text)
 	for i, arg := range args {
 		if arg == "--provider" && i+1 < len(args) {
-			provider = args[i+1]
-		}
-		if arg == "--azure-subscription" && i+1 < len(args) {
-			azureSubscription = args[i+1]
+			ra.provider = args[i+1]
 		}
 		if arg == "--days" && i+1 < len(args) {
-			if d, err := fmt.Sscanf(args[i+1], "%d", &days); err != nil || d != 1 || days < 1 {
-				days = 7
+			if d, err := fmt.Sscanf(args[i+1], "%d", &ra.days); err != nil || d != 1 || ra.days < 1 {
+				ra.days = 7
 			}
 		}
 		if arg == "--data-delay" && i+1 < len(args) {
-			if d, err := fmt.Sscanf(args[i+1], "%d", &dataDelayHours); err != nil || d != 1 || dataDelayHours < 0 {
-				dataDelayHours = 48
+			if d, err := fmt.Sscanf(args[i+1], "%d", &ra.dataDelayHours); err != nil || d != 1 || ra.dataDelayHours < 0 {
+				ra.dataDelayHours = 48
 			}
 		}
 		if arg == "--cost-type" && i+1 < len(args) {
-			costType = args[i+1]
+			ra.costType = args[i+1]
 		}
 	}
+	if ra.days > 365 {
+		ra.days = 365
+	}
+	return ra
+}
+
+func (s *Server) handleReconcile(ctx context.Context, text string) (string, error) {
+	ra := parseReconcileArgs(text)
 
 	report, info, err := s.getReport(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	dataDelay := time.Duration(dataDelayHours) * time.Hour
+	dataDelay := time.Duration(ra.dataDelayHours) * time.Hour
 	end := time.Now().UTC().Add(-dataDelay)
-	start := end.AddDate(0, 0, -days)
+	start := end.AddDate(0, 0, -ra.days)
 
 	var result *billing.ReconciliationReport
 
-	switch provider {
+	switch ra.provider {
 	case "azure":
+		azureSubscription := os.Getenv("AZURE_SUBSCRIPTION_ID")
 		if azureSubscription == "" {
-			azureSubscription = os.Getenv("AZURE_SUBSCRIPTION_ID")
+			return "AZURE_SUBSCRIPTION_ID not set. Configure it on the server.", nil
 		}
-		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription, CostType: costType}
+		azureCfg := billing.AzureConfig{SubscriptionID: azureSubscription, CostType: ra.costType}
 		azureClient, err := billing.NewAzureCostClient(ctx, azureCfg)
 		if err != nil {
 			return fmt.Sprintf("Azure connection failed: %v", err), nil
 		}
 		estimatedCosts, pvEstimates, lbEstimates := billing.BuildEstimateMaps(report)
-		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, float64(days))
+		result, err = billing.ReconcileAzure(ctx, azureClient, info.Nodes, estimatedCosts, report.Namespaces, info.PVCs, pvEstimates, info.LoadBalancers, lbEstimates, start, end, float64(ra.days))
 		if err != nil {
 			return fmt.Sprintf("Azure cost query failed: %v", err), nil
 		}

@@ -259,6 +259,7 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 		log.Printf("warning: failed to list services: %v", err)
 	}
 	var lbInfos []LBServiceInfo
+	seenLBs := make(map[string]bool)
 	for _, svc := range services {
 		if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 			hostname := ""
@@ -267,6 +268,12 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 				if hostname == "" {
 					hostname = svc.Status.LoadBalancer.Ingress[0].IP
 				}
+			}
+			if hostname != "" && seenLBs[hostname] {
+				continue
+			}
+			if hostname != "" {
+				seenLBs[hostname] = true
 			}
 			lbInfos = append(lbInfos, LBServiceInfo{
 				Name:      svc.Name,
@@ -281,7 +288,6 @@ func (c *Collector) Collect(ctx context.Context) (*ClusterInfo, error) {
 	if err != nil {
 		log.Printf("warning: failed to list ingresses: %v", err)
 	}
-	seenLBs := make(map[string]bool)
 	for _, ing := range ingresses {
 		for _, lb := range ing.Status.LoadBalancer.Ingress {
 			host := lb.Hostname

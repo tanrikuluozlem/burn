@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -197,7 +198,8 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 		if reconcileProvider == "azure" {
 			source = "Azure Cost Management"
 		}
-		question := fmt.Sprintf("Analyze this %s reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s", source, string(resultJSON))
+		variance := buildReconcileVariance(result)
+		question := fmt.Sprintf("Analyze this %s reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s\n\n%s", source, variance, string(resultJSON))
 
 		fmt.Fprintln(os.Stderr, "\nfetching AI analysis...")
 		_, err = advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {
@@ -449,6 +451,33 @@ func outputReconcileTable(r *billing.ReconciliationReport, provider string) {
 		fmt.Printf("\nWarning: %d/%d days queried (%d failed) — results may be incomplete\n",
 			r.DaysQueried, r.DaysQueried+r.DaysFailed, r.DaysFailed)
 	}
+}
+
+func buildReconcileVariance(r *billing.ReconciliationReport) string {
+	if r.InfraCost == nil {
+		return ""
+	}
+	ic := r.InfraCost
+	var lines []string
+	lines = append(lines, "BURN-COMPUTED TOP-LEVEL VARIANCE (use this breakdown exactly — do not recalculate or decompose into lower-level components):")
+	lines = append(lines, fmt.Sprintf("  Compute:          $%+.2f", ic.ComputeActual-ic.ComputeEstimated))
+	if ic.DiskActual > 0 || ic.DiskEstimated > 0 {
+		lines = append(lines, fmt.Sprintf("  Storage:          $%+.2f", ic.DiskActual-ic.DiskEstimated))
+	}
+	if ic.LBActual > 0 || ic.LBEstimated > 0 {
+		lines = append(lines, fmt.Sprintf("  Load Balancers:   $%+.2f", ic.LBActual-ic.LBEstimated))
+	}
+	if ic.UnmatchedCompute > 0 {
+		lines = append(lines, fmt.Sprintf("  Unreconciled:     $%+.2f", ic.UnmatchedCompute))
+	}
+	if ic.PublicIPActual > 0 {
+		lines = append(lines, fmt.Sprintf("  Public IPs:       $%+.2f", ic.PublicIPActual))
+	}
+	if ic.ManagementFee > 0 {
+		lines = append(lines, fmt.Sprintf("  Management Fee:   $%+.2f", ic.ManagementFee))
+	}
+	lines = append(lines, fmt.Sprintf("  Total Difference: $%+.2f (%.1f%%)", r.TotalDifference, r.TotalDiffPercent))
+	return strings.Join(lines, "\n")
 }
 
 func printSetupGuide() {

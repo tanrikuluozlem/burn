@@ -43,6 +43,28 @@ type ReconcileInput struct {
 	Days     int    `json:"days,omitempty" jsonschema:"number of days to query, default 7"`
 }
 
+const ServerInstructions = "Burn reports Kubernetes cost data. Use Burn-reported financial values exactly. " +
+	"Cost and savings opportunities from different tools or categories may overlap — do not sum them into a combined total unless Burn explicitly provides one. " +
+	"Idle capacity is not guaranteed realizable savings. Rightsizing does not prove a node can be removed. " +
+	"Do not invent rankings, priority, risk levels, effort estimates, or additional numeric savings. " +
+	"Preserve Burn's pricing terminology exactly (Reserved Instance vs Savings Plan). " +
+	"Orphaned resources require investigation before deletion."
+
+const AnalyzeDescription = "Analyze Kubernetes cluster costs by node, namespace, and pod. Returns monthly cost, idle capacity, and resource usage. " +
+	"Use reported values exactly. Idle cost is not guaranteed realizable savings. " +
+	"Rightsizing does not guarantee node removal or bill reduction. " +
+	"Idle, spot, consolidation, and rightsizing opportunities may overlap — do not sum them. " +
+	"Do not invent priority rankings, risk levels, effort estimates, or guaranteed savings."
+
+const SpotDescription = "Check which workloads can safely run on spot instances. Evaluates replica count, PDB, local storage, GPU, and priority class. " +
+	"Spot savings may overlap with idle capacity and consolidation opportunities — do not sum across categories. " +
+	"Do not invent priority rankings or effort estimates."
+
+const ReconcileDescription = "Compare estimated Kubernetes costs against actual cloud bill. Supports AWS (CUR/Athena) and Azure (Cost Management). Detects RI/SP/Spot pricing, orphaned disks, and coverage gaps. " +
+	"Reported totals and category breakdowns are authoritative — do not re-sum internal components into additional top-level variance. " +
+	"Preserve RI/SP/Spot terminology exactly as reported. " +
+	"Orphaned resources require investigation before deletion."
+
 func New(cfg Config, pp *pricing.CloudPricingProvider, version string) *Server {
 	s := &Server{
 		config:  cfg,
@@ -51,22 +73,22 @@ func New(cfg Config, pp *pricing.CloudPricingProvider, version string) *Server {
 
 	s.server = mcp.NewServer(
 		&mcp.Implementation{Name: "burn", Version: version},
-		nil,
+		&mcp.ServerOptions{Instructions: ServerInstructions},
 	)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "analyze",
-		Description: "Analyze Kubernetes cluster costs by node, namespace, and pod. Returns monthly cost, idle capacity, and resource usage.",
+		Description: AnalyzeDescription,
 	}, s.handleAnalyze)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "spot_readiness",
-		Description: "Check which workloads can safely run on spot instances. Evaluates replica count, PDB, local storage, GPU, and priority class.",
+		Description: SpotDescription,
 	}, s.handleSpotReadiness)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "reconcile",
-		Description: "Compare estimated Kubernetes costs against actual cloud bill. Supports AWS (CUR/Athena) and Azure (Cost Management). Detects RI/SP/Spot pricing, orphaned disks, and coverage gaps.",
+		Description: ReconcileDescription,
 	}, s.handleReconcile)
 
 	return s

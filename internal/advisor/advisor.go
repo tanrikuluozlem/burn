@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -255,7 +257,7 @@ func (a *Advisor) Ask(ctx context.Context, report *analyzer.CostReport, question
 
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     a.model,
-		MaxTokens: 1024,
+		MaxTokens: 4096,
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -327,13 +329,56 @@ func (a *Advisor) buildAskPrompt(report *analyzer.CostReport, question string, e
 		}
 	}
 
+	metricsNote := ""
+	if report.Period != "" {
+		metricsNote = fmt.Sprintf("\n\nMETRICS: %s average. P95 values are available where shown.", report.Period)
+	} else if report.MetricsSource == "prometheus" {
+		metricsNote = "\n\nMETRICS: instant Prometheus snapshot, no P95 available — do not recommend specific CPU/memory request values."
+	}
+
+	rightsizing := ""
+	if report.Period != "" {
+		var lines []string
+		for _, p := range report.InefficientPods {
+			var parts []string
+			if p.CPUP95Available && p.CPUP95Usage > 0 {
+				parts = append(parts, fmt.Sprintf("CPU %dm (p95×1.5, rounded up)", int64(math.Ceil(p.CPUP95Usage*1.5*1000))))
+			}
+			if p.MemP95Available && p.MemoryP95Usage > 0 {
+				parts = append(parts, fmt.Sprintf("MEM %dMi (p95×1.5, rounded up)", int64(math.Ceil(float64(p.MemoryP95Usage)*1.5/1048576))))
+			}
+			if len(parts) > 0 {
+				lines = append(lines, fmt.Sprintf("• %s/%s: recommend %s", p.Namespace, p.Name, strings.Join(parts, ", ")))
+			}
+		}
+		if len(lines) > 0 {
+			rightsizing = "\n\nRIGHTSIZING (Burn-computed, use these exact values):\n" + strings.Join(lines, "\n")
+		}
+	}
+
+	var opportunities []string
+	if report.TotalIdleCost > 0 {
+		opportunities = append(opportunities, fmt.Sprintf("• Idle capacity: $%.2f/mo (not directly realizable — depends on scheduling and autoscaler)", report.TotalIdleCost))
+	}
+	if report.SpotSavings > 0 {
+		opportunities = append(opportunities, fmt.Sprintf("• Spot opportunity: $%.2f/mo", report.SpotSavings))
+	}
+	wa := report.WasteAnalysis
+	if wa.PotentialSavings > 0 {
+		opportunities = append(opportunities, fmt.Sprintf("• Consolidation potential: $%.2f/mo", wa.PotentialSavings))
+	}
+	opportunitySection := ""
+	if len(opportunities) > 0 {
+		opportunitySection = "\n\nBURN-REPORTED OPPORTUNITIES (unordered — do not rank, reorder, or compare):\n" + strings.Join(opportunities, "\n")
+	}
+
 	return fmt.Sprintf(`Here is the current Kubernetes cluster cost report:
 
-%s%s%s
+%s%s%s%s%s%s
 
 User question: %s
 
-Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, billing, spotSummary, question)
+Answer the question based on the cluster data above. Be specific, use actual node names and numbers from the report. If suggesting actions, include kubectl or eksctl commands. Keep the response concise but informative.`, reportJSON, billing, spotSummary, metricsNote, rightsizing, opportunitySection, question)
 }
 
 const askSystemPrompt = `You are a Kubernetes FinOps expert assistant. You help users understand their cluster costs and find optimization opportunities.
@@ -349,13 +394,29 @@ Guidelines:
 - CPU usage in the report is in cores. Convert to millicores for display: 0.005 cores = 5m, 0.0001 cores = <1m
 - Do NOT calculate your own values. Use the data as provided. Never sum, multiply, or derive numbers — only quote exact values from the JSON data.
 - Do not invent specific CPU/memory request targets unless p95 data is provided for that pod.
+- When Burn-computed rightsizing recommendations are provided, use those exact values. Do not calculate your own request targets.
+- Rightsizing targets are per-pod and per-resource. A CPU target for one pod does not apply to another. If a pod has no CPU target, do not infer one. Do not say "across the board" or generalize targets when availability differs.
+- When no p95 data is shown, observe the inefficiency but do not recommend specific CPU/memory request values.
 - When listing items, COUNT them from the data. Do not guess the count — verify it matches the items you list.
 - When showing totals, use ONLY the pre-calculated fields (total_estimated, total_actual, unmatched_compute). Never add up individual line items yourself.
 - Distinguish observation from inference: low-usage or standalone pods are candidates for review, not automatically "forgotten" or "safe to delete".
 - A high-idle node is a candidate for investigation, not automatically safe to drain or remove. Do not claim a node can be eliminated unless the data contains evidence of remaining-node capacity, scheduling feasibility, and PDB compatibility.
-- Idle cost is unallocated capacity cost. It is NOT the same as realizable savings. Do not convert idle cost into a guaranteed cloud-bill reduction.
-- Do not claim that over-provisioned pod requests are causing nodes to remain running unless the data establishes that causal relationship (e.g., autoscaler configuration). Node count may be fixed or managed independently.
+- Idle cost is unallocated capacity cost. It is NOT the same as realizable savings. Do not convert idle cost into a guaranteed cloud-bill reduction unless the data provides explicit evidence of removable capacity (e.g., autoscaler configuration, node count flexibility).
+- Do not claim that over-provisioned pod requests are causing nodes to remain running, or that rightsizing will eliminate nodes or directly reduce the cloud bill, unless the data establishes that causal relationship (e.g., autoscaler configuration). Node count may be fixed or managed independently.
 - PDBs protect against voluntary disruptions only — they do NOT prevent cloud-provider Spot reclamation.
 - Do not assume cluster state that is not in the provided data (e.g., existence of Spot node groups, labels, autoscaler config).
 - The action field must contain only read-only investigation commands (kubectl get, describe, logs, top). Do not generate mutating commands (patch, apply, delete, drain, scale, cordon, edit, set).
-- Only use real kubectl flags. Do NOT invent flags.`
+- Only use real kubectl flags. Do NOT invent flags.
+- Prefer a shorter complete answer over a longer incomplete one. Never end mid-sentence, mid-list, mid-table, or mid-code-block.
+- Do not invent CPU or memory limit values. Burn computes request targets only.
+- CPU/memory requests affect scheduler placement, not runtime CPU caps. A low request does not prevent bursting. Do not describe requests as runtime headroom or claim a request limits burst capacity.
+- Do not label pod allocated cost as waste or savings. Only use those terms when Burn explicitly provides the value with that semantic.
+- Do not rank opportunities by dollar impact or claim one is the biggest, highest-leverage, most pressing, or top priority unless Burn provides that ranking. Do not assign relative priority, actionability, or preference between categories. Do not number categories in a way that implies priority order. Different categories (rightsizing, idle, Spot, storage) may overlap.
+- Do not use "all", "every", or "none" unless every relevant item in the data supports the claim.
+- Do not invent thresholds, floors, minimums, or clamps (e.g., "1m floor"). A target like 1m is p95×1.5 rounded up. When explaining a target, use that provenance. Do not suggest a different numeric request target above or below the Burn-computed value.
+- Do not assert workload ownership (ArgoCD, Helm, GitOps) unless the data proves it. Use conditional language: "if managed by ArgoCD, update source manifests."
+- Do not infer pod ownership or controller state from resource names. Only state ownership facts when the data contains explicit metadata.
+- Keep CPU and memory efficiency claims separate. Do not describe a pod as globally low-efficiency unless every resource metric supports it.
+- When explaining reconciliation variance, use the Burn-provided top-level category breakdown exactly. Do not promote internal sub-components (data transfer, SP/Spot offsets) into separate top-level variance items — they are already included in their parent category.
+- Do not describe an EBS volume as a snapshot. Volumes and snapshots are distinct AWS resource types.
+- Refer to management fees using Burn's label. Do not infer contract type, support tier, or billing agreement details unless the data explicitly provides them.`

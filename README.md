@@ -24,7 +24,7 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 - **AI-powered**: Ask questions in plain English, get recommendations with investigation commands.
 - **Slack-native**: `/burn` for instant cost reports. `/burn reconcile` for billing verification. `/burn ask "..."` for AI analysis.
 - **Cloud + on-prem**: Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters. Billing reconciliation supports AWS and Azure.
-- **Spot readiness**: Identifies which workloads pass spot-readiness checks, with discount and interruption data per instance type.
+- **Spot readiness**: Identifies which workloads pass spot-readiness checks, with discount and interruption data.
 - **Ingress LB detection**: Detects load balancers from both Services and Ingress resources, with hostname deduplication.
 - **MCP server**: Use burn from Claude Code, Cursor, or any MCP-compatible AI agent. Ask questions, get cost data.
 - **Time-aware**: `--period 7d` for weekly averages instead of point-in-time snapshots.
@@ -146,7 +146,7 @@ burn reconcile --provider aws -o json | jq .total_actual_cost
 
 ![spot readiness](assets/demo-spot.gif)
 
-Spot discount and interruption data per instance type.
+Spot discount and interruption data.
 
 ## AI recommendations
 
@@ -271,7 +271,7 @@ AWS CUR / Azure  → actual billing data for reconciliation (optional)
 | Priority | Source | When |
 |----------|--------|------|
 | 1 | AWS/Azure pricing API | Real-time, region-aware when credentials available |
-| 2 | Embedded pricing DB | AWS, Azure, and GCP instances, updated weekly via CI |
+| 2 | Embedded pricing DB | AWS, Azure, and GCP instances; AWS and Azure updated weekly via CI |
 | 3 | Static fallback | Estimates based on instance family for unknown types |
 
 Storage and load balancer costs are fetched from cloud APIs when available, with static fallbacks. Usage-based charges (data processing, LCU) depend on traffic volume and are not included. GPU nodes are detected automatically and priced via ratio-based cost splitting.

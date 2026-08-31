@@ -47,7 +47,6 @@ func TestBuildReconcileVariance(t *testing.T) {
 		t.Error("total difference must be present")
 	}
 
-	// Must NOT contain sub-component breakdowns
 	if strings.Contains(v, "transfer") || strings.Contains(v, "Transfer") {
 		t.Error("must not contain data transfer as separate line")
 	}

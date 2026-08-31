@@ -98,6 +98,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	report.Period = coll.Period()
 
 	// Detect cloud from node labels, not env vars
 	cloud := collector.CloudUnknown

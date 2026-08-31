@@ -2,11 +2,54 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 )
+
+func TestServerInstructions(t *testing.T) {
+	if ServerInstructions == "" {
+		t.Fatal("ServerInstructions must be non-empty")
+	}
+	checks := []struct {
+		substr string
+	}{
+		{"do not sum them"},
+		{"not guaranteed realizable savings"},
+		{"Do not invent rankings"},
+		{"Reserved Instance vs Savings Plan"},
+		{"investigation before deletion"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(ServerInstructions, c.substr) {
+			t.Errorf("ServerInstructions missing %q", c.substr)
+		}
+	}
+}
+
+func TestToolDescriptionGrounding(t *testing.T) {
+	checks := []struct {
+		desc   string
+		substr string
+	}{
+		{AnalyzeDescription, "do not sum them"},
+		{AnalyzeDescription, "not guaranteed realizable savings"},
+		{AnalyzeDescription, "does not guarantee node removal"},
+		{AnalyzeDescription, "Do not invent priority rankings"},
+		{SpotDescription, "do not sum across categories"},
+		{ReconcileDescription, "authoritative"},
+		{ReconcileDescription, "Preserve RI/SP/Spot terminology"},
+		{ReconcileDescription, "investigation before deletion"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(c.desc, c.substr) {
+			t.Errorf("description missing %q", c.substr)
+		}
+	}
+}
 
 func TestNamespaceResultFound(t *testing.T) {
 	report := &analyzer.CostReport{

@@ -456,6 +456,7 @@ func DetectCoverageGaps(nodes []NodeReconciliation) []CoverageGap {
 			InstanceType:    n.InstanceType,
 			Region:          n.Region,
 			MonthlyCost:     n.ActualCost,
+			OnDemandCost:    n.EstimatedMonthlyCost,
 			PotentialSaving: saving,
 			Recommendation:  fmt.Sprintf("$%.0f/mo with 1yr Reserved Instance", saving),
 		})

@@ -128,6 +128,7 @@ type CoverageGap struct {
 	InstanceType    string  `json:"instance_type"`
 	Region          string  `json:"region"`
 	MonthlyCost     float64 `json:"monthly_cost"`
+	OnDemandCost    float64 `json:"on_demand_cost"`
 	PotentialSaving float64 `json:"potential_saving"`
 	Recommendation  string  `json:"recommendation"`
 }
@@ -147,10 +148,12 @@ type InfrastructureSummary struct {
 }
 
 type ReconciliationReport struct {
-	GeneratedAt time.Time `json:"generated_at"`
-	PeriodStart time.Time `json:"period_start"`
-	PeriodEnd   time.Time `json:"period_end"`
-	DataDelay   string    `json:"data_delay"`
+	GeneratedAt  time.Time `json:"generated_at"`
+	PeriodStart  time.Time `json:"period_start"`
+	PeriodEnd    time.Time `json:"period_end"`
+	DataDelay    string    `json:"data_delay"`
+	CostBasis    string    `json:"cost_basis"`
+	DiscountNote string    `json:"discount_note"`
 
 	TotalEstimatedCost float64 `json:"total_estimated_cost"`
 	TotalActualCost    float64 `json:"total_actual_cost"`

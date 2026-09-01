@@ -73,6 +73,7 @@ func TestAskPromptConstraints(t *testing.T) {
 		{"reconcile top-level variance", "Do not promote internal sub-components"},
 		{"no volume-snapshot confusion", "Do not describe an EBS volume as a snapshot"},
 		{"management fee label only", "Do not infer contract type, support tier"},
+		{"evidence boundary", "Present only facts explicitly supported by Burn-provided data as facts"},
 	}
 
 	for _, c := range checks {

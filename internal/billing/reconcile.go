@@ -11,6 +11,8 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/collector"
 )
 
+const reconcileDiscountNote = "total_sp_savings and total_spot_savings are estimate-minus-actual reconciliation deltas, not economic savings from the pricing instrument. coverage_gaps[].potential_saving is a forward-looking modeled RI pricing opportunity."
+
 type Reconciler struct {
 	athena *AthenaClient
 }
@@ -194,10 +196,12 @@ func (r *Reconciler) Reconcile(
 	}
 
 	return &ReconciliationReport{
-		GeneratedAt:        time.Now().UTC(),
-		PeriodStart:        start,
-		PeriodEnd:          end,
-		DataDelay:          "CUR data delayed ~48h",
+		GeneratedAt:  time.Now().UTC(),
+		PeriodStart:  start,
+		PeriodEnd:    end,
+		DataDelay:    "CUR data delayed ~48h",
+		CostBasis:    "monthly_projected",
+		DiscountNote: reconcileDiscountNote,
 		TotalEstimatedCost: infra.TotalEstimated,
 		TotalActualCost:    infra.TotalActual,
 		TotalDifference:    infraDiff,

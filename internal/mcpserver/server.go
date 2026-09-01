@@ -342,15 +342,7 @@ func (s *Server) handleReconcile(ctx context.Context, _ *mcp.CallToolRequest, in
 
 	billing.EnrichCoverageGaps(ctx, result.CoverageGaps, s.pricing)
 
-	wrapper := struct {
-		CostBasis string `json:"cost_basis"`
-		*billing.ReconciliationReport
-	}{
-		CostBasis:            "monthly_projected",
-		ReconciliationReport: result,
-	}
-
-	data, err := json.Marshal(wrapper)
+	data, err := json.Marshal(result)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal reconciliation: %w", err)
 	}

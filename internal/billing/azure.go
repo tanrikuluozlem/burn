@@ -372,10 +372,12 @@ func ReconcileAzure(ctx context.Context, client *AzureCostClient, nodes []collec
 	}
 
 	return &ReconciliationReport{
-		GeneratedAt:        time.Now().UTC(),
-		PeriodStart:        start,
-		PeriodEnd:          end,
-		DataDelay:          "Azure cost data delayed 8-24h (EA/MCA), up to 72h (PAYG)",
+		GeneratedAt:  time.Now().UTC(),
+		PeriodStart:  start,
+		PeriodEnd:    end,
+		DataDelay:    "Azure cost data delayed 8-24h (EA/MCA), up to 72h (PAYG)",
+		CostBasis:    "monthly_projected",
+		DiscountNote: reconcileDiscountNote,
 		TotalEstimatedCost: infra.TotalEstimated,
 		TotalActualCost:    infra.TotalActual,
 		TotalDifference:    infraDiff,

@@ -491,7 +491,7 @@ func TestMatchLBsToServicesOrphaned(t *testing.T) {
 
 func TestDetectCoverageGaps(t *testing.T) {
 	nodes := []NodeReconciliation{
-		{NodeName: "node-1", InstanceType: "m5.xlarge", PricingTerm: "OnDemand", ActualCost: 140.16},
+		{NodeName: "node-1", InstanceType: "m5.xlarge", PricingTerm: "OnDemand", ActualCost: 140.16, EstimatedMonthlyCost: 130.00},
 		{NodeName: "node-2", InstanceType: "m5.xlarge", PricingTerm: "Reserved", ActualCost: 90.00},
 		{NodeName: "node-3", InstanceType: "t3.small", PricingTerm: "OnDemand", ActualCost: 15.00},
 	}
@@ -507,6 +507,9 @@ func TestDetectCoverageGaps(t *testing.T) {
 	expectedSaving := 140.16 * 0.30
 	if math.Abs(gaps[0].PotentialSaving-expectedSaving) > 0.01 {
 		t.Errorf("potential saving = %.2f, want %.2f", gaps[0].PotentialSaving, expectedSaving)
+	}
+	if gaps[0].OnDemandCost != 130.00 {
+		t.Errorf("on_demand_cost = %.2f, want 130.00", gaps[0].OnDemandCost)
 	}
 }
 
@@ -906,5 +909,21 @@ func TestClassifyAzureResource(t *testing.T) {
 			t.Errorf("classifyAzureResource(%q, %q) = %q, want %q",
 				tt.resourceType, tt.meterCategory, got, tt.want)
 		}
+	}
+}
+
+func TestReconcileMetadata(t *testing.T) {
+	r := &ReconciliationReport{
+		CostBasis:    "monthly_projected",
+		DiscountNote: reconcileDiscountNote,
+	}
+	if r.CostBasis != "monthly_projected" {
+		t.Errorf("CostBasis = %q, want monthly_projected", r.CostBasis)
+	}
+	if r.DiscountNote == "" {
+		t.Error("DiscountNote must be non-empty")
+	}
+	if r.DiscountNote != reconcileDiscountNote {
+		t.Error("DiscountNote does not match canonical constant")
 	}
 }

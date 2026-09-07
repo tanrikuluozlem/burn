@@ -1,6 +1,6 @@
 # Azure VM Instance Pricing (Linux, On-Demand)
 # Source: https://azure.microsoft.com/pricing/details/virtual-machines/linux/
-# Auto-generated: 2026-08-31
+# Auto-generated: 2026-09-07
 # DO NOT EDIT MANUALLY - run 'go run scripts/update-pricing.go azure'
 
 australiaeast:
@@ -42,6 +42,7 @@ eastus:
     Standard_D2as_v5: 0.086
     Standard_D2s_v3: 0.096
     Standard_D2s_v4: 0.096
+    Standard_D2s_v5: 0.096
     Standard_D4as_v4: 0.192
     Standard_D4as_v5: 0.356
     Standard_D4s_v3: 0.192

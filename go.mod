@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.46.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.3
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.19.2
-	github.com/aws/aws-sdk-go-v2/service/athena v1.61.0
+	github.com/aws/aws-sdk-go-v2/service/athena v1.65.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.324.0
 	github.com/aws/aws-sdk-go-v2/service/pricing v1.47.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0

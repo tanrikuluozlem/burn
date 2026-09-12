@@ -11,25 +11,25 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/tanrikuluozlem/burn/internal/advisor"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
 	"github.com/tanrikuluozlem/burn/internal/billing"
 	"github.com/tanrikuluozlem/burn/internal/collector"
 	ofmt "github.com/tanrikuluozlem/burn/internal/output"
 	"github.com/tanrikuluozlem/burn/internal/pricing"
-	"github.com/spf13/cobra"
 )
 
 var (
-	curDatabase      string
-	curTable         string
-	curOutputLoc     string
-	curWorkgroup     string
-	curRegion        string
-	curDays          int
-	reconcileOut     string
-	reconcileAI      bool
-	reconcileSetup   bool
+	curDatabase       string
+	curTable          string
+	curOutputLoc      string
+	curWorkgroup      string
+	curRegion         string
+	curDays           int
+	reconcileOut      string
+	reconcileAI       bool
+	reconcileSetup    bool
 	reconcileProvider string
 	azureSubscription string
 	azureCostType     string
@@ -199,7 +199,18 @@ func runReconcile(cmd *cobra.Command, _ []string) error {
 			source = "Azure Cost Management"
 		}
 		variance := buildReconcileVariance(result)
-		question := fmt.Sprintf("Analyze this %s reconciliation report. Explain why the estimated vs actual costs differ. What discounts are applied? What actions should be taken?\n\n%s\n\n%s", source, variance, string(resultJSON))
+		question := fmt.Sprintf(`Analyze this %s reconciliation report.
+
+Your analysis should go beyond restating the table. Identify:
+1. What the variance breakdown reveals (use the Burn-computed breakdown below)
+2. Relationships between findings — does one finding change how another should be evaluated? For example, if capacity is underutilized, does that affect whether a pricing commitment is worthwhile? If a resource is unmatched, does it explain part of the variance?
+3. What an engineer should investigate first and why, based on decision value — which finding, if wrong or actionable, would change the most about how this cluster is operated or billed?
+
+Label each claim as OBSERVED (directly in the data), DERIVED (logically follows from multiple data points), or HYPOTHESIS (plausible but requires verification).
+
+%s
+
+%s`, source, variance, string(resultJSON))
 
 		fmt.Fprintln(os.Stderr, "\nfetching AI analysis...")
 		_, err = advisor.New(apiKey).AskStream(ctx, report, question, func(text string) {

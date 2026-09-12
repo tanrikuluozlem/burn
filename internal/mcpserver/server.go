@@ -56,7 +56,8 @@ const AnalyzeDescription = "Analyze Kubernetes cluster costs by node, namespace,
 	"Idle, spot, consolidation, and rightsizing opportunities may overlap — do not sum them. " +
 	"Do not invent priority rankings, risk levels, effort estimates, or guaranteed savings."
 
-const SpotDescription = "Check which workloads can safely run on spot instances. Evaluates replica count, PDB, local storage, GPU, and priority class. " +
+const SpotDescription = "Check which workloads pass spot-readiness checks. Evaluates replica count, PDB, local storage, GPU, and priority class. " +
+	"spot-ready is a technical eligibility assessment — it does not establish business criticality, environment safety, or migration priority. " +
 	"Spot savings may overlap with idle capacity and consolidation opportunities — do not sum across categories. " +
 	"Do not invent priority rankings or effort estimates."
 
@@ -64,6 +65,22 @@ const ReconcileDescription = "Compare estimated Kubernetes costs against actual 
 	"Reported totals and category breakdowns are authoritative — do not re-sum internal components into additional top-level variance. " +
 	"Preserve RI/SP/Spot terminology exactly as reported. " +
 	"Orphaned resources require investigation before deletion."
+
+const idleNote = "Idle cost is the cost of node capacity not requested by any pod. " +
+	"It is not guaranteed recoverable savings. " +
+	"Removing a node requires verified scheduling feasibility, remaining-node capacity, and PDB compatibility — idle percentage alone does not prove this."
+
+const reconcileNote = "total_estimated_cost and total_actual_cost are the authoritative totals for reconciliation variance. " +
+	"total_difference and total_diff_percent represent that comparison. " +
+	"Category fields (compute_estimated, disk_estimated, lb_estimated) are components of total_estimated_cost — " +
+	"compare each category's estimated and actual values only within the same category. " +
+	"Do not compare a single category estimate against the total actual. " +
+	"management_fee is derived from cloud provider managed-service billing line items. " +
+	"Do not infer fee type, service identity, fixed/variable nature, or avoidability from the amount alone."
+
+const unmatchedDiskNote = "Entries in orphaned_disks are billing volumes with no matching current Kubernetes PVC or known cluster disk in Burn's reconciliation. " +
+	"This does not prove the volume is unattached at the cloud provider level or safe to delete. " +
+	"Verify actual attachment state and contents before taking action."
 
 func New(cfg Config, pp *pricing.CloudPricingProvider, version string) *Server {
 	s := &Server{
@@ -190,6 +207,7 @@ func analyzeResult(report *analyzer.CostReport) (*mcp.CallToolResult, any, error
 		MonthlyCost      float64                `json:"monthly_cost"`
 		TotalIdleCost    float64                `json:"total_idle_cost"`
 		IdlePercent      float64                `json:"idle_percent"`
+		IdleNote         string                 `json:"idle_note"`
 		TotalMonthlyCost float64                `json:"total_monthly_cost"`
 		MetricsSource    string                 `json:"metrics_source"`
 		Period           string                 `json:"period,omitempty"`
@@ -206,6 +224,7 @@ func analyzeResult(report *analyzer.CostReport) (*mcp.CallToolResult, any, error
 		MonthlyCost:      report.MonthlyCost,
 		TotalIdleCost:    report.TotalIdleCost,
 		IdlePercent:      idlePercent,
+		IdleNote:         idleNote,
 		TotalMonthlyCost: report.TotalMonthlyCost,
 		MetricsSource:    report.MetricsSource,
 		Period:           report.Period,
@@ -254,6 +273,7 @@ func (s *Server) handleSpotReadiness(ctx context.Context, _ *mcp.CallToolRequest
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return spotResult(report)
 }
 
@@ -342,7 +362,17 @@ func (s *Server) handleReconcile(ctx context.Context, _ *mcp.CallToolRequest, in
 
 	billing.EnrichCoverageGaps(ctx, result.CoverageGaps, s.pricing)
 
-	data, err := json.Marshal(result)
+	envelope := struct {
+		*billing.ReconciliationReport
+		ReconcileNote    string `json:"reconcile_note"`
+		OrphanedDiskNote string `json:"orphaned_disk_note"`
+	}{
+		ReconciliationReport: result,
+		ReconcileNote:        reconcileNote,
+		OrphanedDiskNote:     unmatchedDiskNote,
+	}
+
+	data, err := json.Marshal(envelope)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal reconciliation: %w", err)
 	}
@@ -408,3 +438,4 @@ func spotResult(report *analyzer.CostReport) (*mcp.CallToolResult, any, error) {
 		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
 	}, nil, nil
 }
+

@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tanrikuluozlem/burn/internal/analyzer"
+	"github.com/tanrikuluozlem/burn/internal/billing"
 )
 
 func TestServerInstructions(t *testing.T) {
@@ -117,10 +118,10 @@ func TestSpotResultEmpty(t *testing.T) {
 	}
 
 	var data struct {
-		ReadyCount int     `json:"ready_count"`
+		ReadyCount    int     `json:"ready_count"`
 		NotReadyCount int     `json:"not_ready_count"`
-		Total      int     `json:"total"`
-		Savings    float64 `json:"potential_savings_monthly"`
+		Total         int     `json:"total"`
+		Savings       float64 `json:"potential_savings_monthly"`
 	}
 	text := result.Content[0].(*mcp.TextContent).Text
 	if err := json.Unmarshal([]byte(text), &data); err != nil {
@@ -150,11 +151,11 @@ func TestSpotResultWithWorkloads(t *testing.T) {
 	}
 
 	var data struct {
-		ReadyCount int            `json:"ready_count"`
+		ReadyCount    int            `json:"ready_count"`
 		NotReadyCount int            `json:"not_ready_count"`
-		Total      int            `json:"total"`
-		Savings    float64        `json:"potential_savings_monthly"`
-		Blockers   map[string]int `json:"blockers"`
+		Total         int            `json:"total"`
+		Savings       float64        `json:"potential_savings_monthly"`
+		Blockers      map[string]int `json:"blockers"`
 	}
 	text := result.Content[0].(*mcp.TextContent).Text
 	if err := json.Unmarshal([]byte(text), &data); err != nil {
@@ -177,5 +178,153 @@ func TestSpotResultWithWorkloads(t *testing.T) {
 	}
 	if data.Savings != 32.50 {
 		t.Errorf("savings = %.2f, want 32.50", data.Savings)
+	}
+}
+
+func TestAnalyzeResultIdleNote(t *testing.T) {
+	report := &analyzer.CostReport{
+		TotalNodes:    2,
+		TotalPods:     5,
+		MonthlyCost:   300,
+		TotalIdleCost: 111,
+		Nodes: []analyzer.NodeCost{
+			{Name: "node-1", MonthlyPrice: 150, IdlePercent: 0.37, IdleCostMonthly: 55.5},
+			{Name: "node-2", MonthlyPrice: 150, IdlePercent: 0.37, IdleCostMonthly: 55.5},
+		},
+	}
+
+	result, _, err := analyzeResult(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := result.Content[0].(*mcp.TextContent).Text
+
+	var parsed struct {
+		TotalIdleCost float64 `json:"total_idle_cost"`
+		IdlePercent   float64 `json:"idle_percent"`
+		IdleNote      string  `json:"idle_note"`
+		MonthlyCost   float64 `json:"monthly_cost"`
+	}
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if parsed.IdleNote == "" {
+		t.Fatal("idle_note field is missing")
+	}
+	if !strings.Contains(parsed.IdleNote, "not guaranteed recoverable savings") {
+		t.Errorf("idle_note should mention non-recoverable savings, got: %s", parsed.IdleNote)
+	}
+	if !strings.Contains(parsed.IdleNote, "scheduling feasibility") {
+		t.Errorf("idle_note should mention scheduling feasibility, got: %s", parsed.IdleNote)
+	}
+	if parsed.TotalIdleCost != 111 {
+		t.Errorf("total_idle_cost = %.2f, want 111", parsed.TotalIdleCost)
+	}
+	if parsed.MonthlyCost != 300 {
+		t.Errorf("monthly_cost = %.2f, want 300", parsed.MonthlyCost)
+	}
+}
+
+func TestReconcileEnvelopeNotes(t *testing.T) {
+	report := &billing.ReconciliationReport{
+		TotalEstimatedCost: 328.72,
+		TotalActualCost:    412.17,
+		TotalDifference:    83.45,
+		TotalDiffPercent:   25.4,
+		DiscountNote:       "coverage_gaps[].potential_saving is a forward-looking modeled RI pricing opportunity.",
+		InfraCost: &billing.InfrastructureSummary{
+			ComputeEstimated: 307.91,
+			ComputeActual:    310.02,
+			ManagementFee:    73.00,
+			TotalEstimated:   328.72,
+			TotalActual:      412.17,
+		},
+		OrphanedDisks: []billing.DiskReconciliation{
+			{DiskName: "vol-001", ActualCost: 1.87, IsOrphaned: true},
+		},
+	}
+
+	data, err := json.Marshal(struct {
+		*billing.ReconciliationReport
+		ReconcileNote    string `json:"reconcile_note"`
+		OrphanedDiskNote string `json:"orphaned_disk_note"`
+	}{
+		ReconciliationReport: report,
+		ReconcileNote:        reconcileNote,
+		OrphanedDiskNote:     unmatchedDiskNote,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	rn, ok := parsed["reconcile_note"].(string)
+	if !ok || rn == "" {
+		t.Fatal("reconcile_note field is missing")
+	}
+	if !strings.Contains(rn, "total_estimated_cost") {
+		t.Error("reconcile_note should reference total_estimated_cost")
+	}
+	if !strings.Contains(rn, "total_actual_cost") {
+		t.Error("reconcile_note should reference total_actual_cost")
+	}
+	if !strings.Contains(rn, "same category") {
+		t.Error("reconcile_note should warn about cross-category comparison")
+	}
+	if !strings.Contains(rn, "management_fee") {
+		t.Error("reconcile_note should address management_fee semantics")
+	}
+
+	dn, ok := parsed["orphaned_disk_note"].(string)
+	if !ok || dn == "" {
+		t.Fatal("orphaned_disk_note field is missing")
+	}
+	if !strings.Contains(dn, "no matching current Kubernetes PVC") {
+		t.Error("orphaned_disk_note should explain what orphaned means")
+	}
+	if !strings.Contains(dn, "does not prove") {
+		t.Error("orphaned_disk_note should state evidence boundary")
+	}
+
+	if parsed["total_estimated_cost"].(float64) != 328.72 {
+		t.Errorf("total_estimated_cost changed")
+	}
+	if parsed["total_actual_cost"].(float64) != 412.17 {
+		t.Errorf("total_actual_cost changed")
+	}
+	if parsed["total_difference"].(float64) != 83.45 {
+		t.Errorf("total_difference changed")
+	}
+
+	if !strings.Contains(parsed["discount_note"].(string), "forward-looking modeled") {
+		t.Error("discount_note should be preserved")
+	}
+
+	od, ok := parsed["orphaned_disks"].([]any)
+	if !ok || len(od) != 1 {
+		t.Errorf("orphaned_disks field should be present with 1 entry, got %v", parsed["orphaned_disks"])
+	}
+
+	ic := parsed["infra_cost"].(map[string]any)
+	if ic["compute_estimated"].(float64) != 307.91 {
+		t.Error("compute_estimated changed")
+	}
+	if ic["management_fee"].(float64) != 73.00 {
+		t.Error("management_fee changed")
+	}
+}
+
+func TestSpotDescriptionEligibilityBoundary(t *testing.T) {
+	if !strings.Contains(SpotDescription, "technical eligibility") {
+		t.Error("SpotDescription should mention technical eligibility")
+	}
+	if !strings.Contains(SpotDescription, "does not establish business criticality") {
+		t.Error("SpotDescription should state it does not establish business criticality")
 	}
 }

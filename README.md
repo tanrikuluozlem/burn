@@ -18,9 +18,9 @@ No agent to deploy. No dashboard to maintain. No YAML to configure. Just install
 - **Zero setup**: `brew install`, run one command, get answers. No cluster agent, no persistent storage, no config files.
 - **Full cost coverage**: Compute, storage, load balancers, and GPU costs with cloud pricing.
 - **Billing reconciliation**: Verify cost estimates against your real AWS CUR or Azure Cost Management bill. Per node, per disk, per load balancer.
-- **SP/RI/Spot detection**: See which nodes have Savings Plan, Reserved Instance, or Spot coverage. Coverage gaps show real RI savings from cloud pricing APIs.
+- **SP/RI/Spot detection**: See which nodes have Savings Plan, Reserved Instance, or Spot coverage. Coverage gaps show 1-year RI pricing opportunities from AWS and Azure APIs.
 - **Optimization insights**: Find rightsizing, Spot, and consolidation opportunities, using historical P95 usage when available.
-- **Orphaned resource detection**: Find disks and load balancers you're paying for but not using.
+- **Orphaned resource detection**: Find billed disks and load balancers with no matching Kubernetes resource.
 - **AI-powered**: Ask questions in plain English, get recommendations with investigation commands.
 - **Slack-native**: `/burn` for instant cost reports. `/burn reconcile` for billing verification. `/burn ask "..."` for AI analysis.
 - **Cloud + on-prem**: Works with AWS EKS, Azure AKS, GCP GKE, and on-premise clusters. Billing reconciliation supports AWS and Azure.
@@ -113,7 +113,7 @@ burn reconcile --provider azure
 What you get:
 - Per-node estimated vs actual cost with dollar difference
 - Savings Plan, Reserved Instance, and Spot pricing detected per node, including partial coverage
-- Coverage gaps with real 1-year RI pricing from AWS and Azure pricing APIs
+- Coverage gaps with 1-year RI pricing from AWS and Azure pricing APIs
 - Orphaned disks and load balancers in your bill with no matching K8s resource
 - OS disk costs separated from data disks
 - Public IP costs itemized
@@ -258,7 +258,7 @@ Without custom pricing, cloud-equivalent rates are used as defaults.
 ```
 Kubernetes API   → nodes, pods, PVCs, services, ingresses
 Prometheus       → actual CPU & memory usage (optional)
-Cloud Pricing    → real VM, storage, GPU, and RI prices (AWS, Azure, GCP)
+Cloud Pricing    → VM, storage, GPU, and RI pricing (AWS, Azure live APIs; GCP embedded)
 AWS CUR / Azure  → actual billing data for reconciliation (optional)
          ↓
     Cost Engine  → estimates, reconciliation, SP/RI/Spot detection
@@ -270,7 +270,7 @@ AWS CUR / Azure  → actual billing data for reconciliation (optional)
 
 | Priority | Source | When |
 |----------|--------|------|
-| 1 | AWS/Azure pricing API | Real-time, region-aware when credentials available |
+| 1 | AWS/Azure pricing API | Live, region-aware when credentials are available |
 | 2 | Embedded pricing DB | AWS, Azure, and GCP instances; AWS and Azure updated weekly via CI |
 | 3 | Static fallback | Estimates based on instance family for unknown types |
 
@@ -369,7 +369,7 @@ spec:
 | `--cost-type` | Azure cost type: `amortized` or `actual` (default: amortized) |
 | `--data-delay` | Billing data delay in hours (default: 48; AWS CUR ~24h, Azure EA/MCA 8-24h, Azure PAYG up to 72h) |
 
-Cloud clusters use real pricing automatically. On-prem pricing flags are for clusters where cloud pricing is not available.
+AWS and Azure clusters use live cloud pricing automatically. GCP clusters use embedded pricing. On-prem pricing flags are for clusters where cloud pricing is not available.
 
 ## Development
 

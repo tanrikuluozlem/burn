@@ -30,12 +30,12 @@ github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.2 h1:XMgIRS+uW9F3yFKnXGRrI9pkHi99
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.2/go.mod h1:vorxDzK+n3jiv9a5ST/LG0Eu9cSv1CRdKTpG6pDMs+M=
 github.com/aws/aws-sdk-go-v2/service/athena v1.66.0 h1:yGKwA5TyFb0tBKa1+byMbzFzBlW/UIFpCEQJ7KcV28c=
 github.com/aws/aws-sdk-go-v2/service/athena v1.66.0/go.mod h1:j8OCGk/z/vfyinafVEKlb9aTADhofCK2/j3oOXsWn7U=
-github.com/aws/aws-sdk-go-v2/service/ec2 v1.329.0 h1:diNdfHw/832G8QYVQ6uz5kwOC0pCAZNnn+Gvz0UXPag=
-github.com/aws/aws-sdk-go-v2/service/ec2 v1.329.0/go.mod h1:mILEu29lo7lpbpkBIy4BtVFoHPLyM/ngOKYCZHEqciM=
+github.com/aws/aws-sdk-go-v2/service/ec2 v1.335.0 h1:F4FgmFpQEuf1cb74G5nZvcjt4Y8lOUrTjpY8ZGaQzq4=
+github.com/aws/aws-sdk-go-v2/service/ec2 v1.335.0/go.mod h1:2o5yJcnWuaBOsnNqlO1reYs1OQffFkqf2xJ2mmMWNH4=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19 h1:bAdDl/HkGCcGPoe25ToSHEw23VIxt6CT5fLcg111BKg=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19/go.mod h1:KaUzbLxv4CeSxh6ZCl9B4m7CuFenS8kUEaDs+f/DQr4=
-github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.2 h1:ZtHYnumr6QyxhzEzNZwzQTFJEXOswrZqTTkRxthwvr4=
-github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.2/go.mod h1:a1NXrYpBd311gBzn1UI5UzJyyvXktM4xNh/ydPiPpqY=
+github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.3 h1:bON1rJf67TSTDCKg816AAIE4xSTtoo9tl0XRkO72R+I=
+github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.3/go.mod h1:c5BBpjJcQXpfeq9iASyVKA3T6vX6B6LEXY4mL/gklDY=
 github.com/aws/aws-sdk-go-v2/service/pricing v1.49.0 h1:Uh6hUolDg79Hyh7YiNzRQfXaPrf7qJU2tiGE6IvY48g=
 github.com/aws/aws-sdk-go-v2/service/pricing v1.49.0/go.mod h1:PuUyd2vuqd46NPQ0sftTMyv9uBgsgSHyox4Vpt1+FXk=
 github.com/aws/aws-sdk-go-v2/service/signin v1.9.0 h1:c3k+k/CS4L+sAIH6fxikL+g5g2LpeNczaoyjjw1iMKI=

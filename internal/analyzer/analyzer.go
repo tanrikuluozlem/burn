@@ -77,6 +77,10 @@ func (a *Analyzer) Analyze(ctx context.Context, info *collector.ClusterInfo) (*C
 		}
 	}
 
+	if len(report.Nodes) < 2 {
+		report.WasteAnalysis.PotentialSavings = 0
+	}
+
 	report.HourlyCost = totalHourly
 	report.MonthlyCost = totalHourly * hoursPerMonth
 	report.TotalIdleCost = totalIdleHourly * hoursPerMonth

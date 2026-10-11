@@ -16,7 +16,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/pricing/types"
+	burnpricing "github.com/tanrikuluozlem/burn/internal/pricing"
 	"gopkg.in/yaml.v3"
+)
+
+const (
+	awsCatalogPath   = "internal/pricing/data/aws.yaml"
+	azureCatalogPath = "internal/pricing/data/azure.yaml"
 )
 
 var awsRegions = []string{
@@ -66,36 +72,167 @@ func main() {
 
 	target := os.Args[1]
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	var specs []catalogSpec
 	switch target {
 	case "aws":
-		if err := updateAWS(); err != nil {
+		spec, err := awsSpec(ctx)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "AWS error: %v\n", err)
 			os.Exit(1)
 		}
+		specs = []catalogSpec{spec}
 	case "azure":
-		if err := updateAzure(); err != nil {
-			fmt.Fprintf(os.Stderr, "Azure error: %v\n", err)
+		specs = []catalogSpec{azureSpec()}
+	case "all":
+		spec, err := awsSpec(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "AWS error: %v\n", err)
 			os.Exit(1)
 		}
-	case "all":
-		if err := updateAWS(); err != nil {
-			fmt.Fprintf(os.Stderr, "AWS error: %v\n", err)
-		}
-		if err := updateAzure(); err != nil {
-			fmt.Fprintf(os.Stderr, "Azure error: %v\n", err)
-		}
+		specs = []catalogSpec{spec, azureSpec()}
 		fmt.Println("GCP: manual update required (no public API)")
 	default:
 		fmt.Printf("Unknown target: %s\n", target)
 		os.Exit(1)
 	}
+
+	if err := runRefresh(specs); err != nil {
+		fmt.Fprintf(os.Stderr, "pricing refresh failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
-func updateAWS() error {
-	fmt.Println("Fetching AWS prices...")
+type catalogSpec struct {
+	path      string
+	cloudName string
+	source    string
+	unit      string
+	regions   []string
+	skus      []string
+	fetch     func(region, sku string) (float64, error)
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+func runRefresh(specs []catalogSpec) error {
+	built := make([]map[string]map[string]float64, len(specs))
+	for i, spec := range specs {
+		prices, err := buildValidatedCatalog(spec)
+		if err != nil {
+			return fmt.Errorf("%s: %w", spec.cloudName, err)
+		}
+		built[i] = prices
+	}
+
+	for i, spec := range specs {
+		if err := writeYAML(spec.path, built[i], spec.cloudName, spec.source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadExistingCatalog(path string) (map[string]map[string]float64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var prices map[string]map[string]float64
+	if err := yaml.Unmarshal(data, &prices); err != nil {
+		return nil, err
+	}
+	if len(prices) == 0 {
+		return nil, fmt.Errorf("no regions in catalog")
+	}
+	return prices, nil
+}
+
+func buildCatalog(spec catalogSpec, previous map[string]map[string]float64) (prices map[string]map[string]float64, blocking, absent []string) {
+	prices = make(map[string]map[string]float64)
+
+	for _, region := range spec.regions {
+		regionPrices := make(map[string]float64)
+		for _, sku := range spec.skus {
+			price, err := spec.fetch(region, sku)
+			if err != nil {
+				msg := fmt.Sprintf("%s/%s: %v", region, sku, err)
+				if _, known := previous[region][sku]; known {
+					blocking = append(blocking, msg)
+				} else {
+					absent = append(absent, msg)
+				}
+				continue
+			}
+			regionPrices[sku] = price
+		}
+		if len(regionPrices) > 0 {
+			prices[region] = regionPrices
+			fmt.Printf("  %s: %d %s\n", region, len(regionPrices), spec.unit)
+		}
+	}
+	return prices, blocking, absent
+}
+
+func validateContinuity(previous, generated map[string]map[string]float64) error {
+	var missingRegions, missingKeys []string
+
+	for region, skus := range previous {
+		generatedRegion, ok := generated[region]
+		if !ok {
+			missingRegions = append(missingRegions, region)
+			continue
+		}
+		for sku := range skus {
+			if _, ok := generatedRegion[sku]; !ok {
+				missingKeys = append(missingKeys, region+"/"+sku)
+			}
+		}
+	}
+
+	if len(missingRegions) == 0 && len(missingKeys) == 0 {
+		return nil
+	}
+
+	sort.Strings(missingRegions)
+	sort.Strings(missingKeys)
+
+	var parts []string
+	if len(missingRegions) > 0 {
+		parts = append(parts, "missing regions: "+strings.Join(missingRegions, ", "))
+	}
+	if len(missingKeys) > 0 {
+		parts = append(parts, "missing keys: "+strings.Join(missingKeys, ", "))
+	}
+	return fmt.Errorf("catalog incomplete: %s", strings.Join(parts, "; "))
+}
+
+func buildValidatedCatalog(spec catalogSpec) (map[string]map[string]float64, error) {
+	previous, err := loadExistingCatalog(spec.path)
+	if err != nil {
+		return nil, fmt.Errorf("load existing catalog %s: %w", spec.path, err)
+	}
+
+	prices, blocking, absent := buildCatalog(spec, previous)
+
+	for _, msg := range absent {
+		fmt.Printf("  skip %s\n", msg)
+	}
+
+	if len(blocking) > 0 {
+		sort.Strings(blocking)
+		return nil, fmt.Errorf("could not refresh known prices: %s", strings.Join(blocking, "; "))
+	}
+
+	if err := validateContinuity(previous, prices); err != nil {
+		return nil, err
+	}
+	return prices, nil
+}
+
+func awsSpec(ctx context.Context) (catalogSpec, error) {
+	fmt.Println("Fetching AWS prices...")
 
 	// Explicitly use environment credentials, skip EC2 IMDS
 	cfg, err := config.LoadDefaultConfig(ctx,
@@ -103,36 +240,29 @@ func updateAWS() error {
 		config.WithEC2IMDSClientEnableState(imds.ClientDisabled),
 	)
 	if err != nil {
-		return fmt.Errorf("aws config: %w", err)
+		return catalogSpec{}, fmt.Errorf("aws config: %w", err)
 	}
 
 	client := pricing.NewFromConfig(cfg)
-	prices := make(map[string]map[string]float64)
 
+	regions := make([]string, 0, len(awsRegions))
 	for _, region := range awsRegions {
-		location, ok := regionToLocation[region]
-		if !ok {
-			continue
-		}
-
-		regionPrices := make(map[string]float64)
-
-		for _, instanceType := range awsInstanceTypes {
-			price, err := getAWSPrice(ctx, client, instanceType, location)
-			if err != nil {
-				fmt.Printf("  skip %s/%s: %v\n", region, instanceType, err)
-				continue
-			}
-			regionPrices[instanceType] = price
-		}
-
-		if len(regionPrices) > 0 {
-			prices[region] = regionPrices
-			fmt.Printf("  %s: %d instances\n", region, len(regionPrices))
+		if _, ok := regionToLocation[region]; ok {
+			regions = append(regions, region)
 		}
 	}
 
-	return writeYAML("internal/pricing/data/aws.yaml", prices, "AWS EC2", "https://aws.amazon.com/ec2/pricing/on-demand/")
+	return catalogSpec{
+		path:      awsCatalogPath,
+		cloudName: "AWS EC2",
+		source:    "https://aws.amazon.com/ec2/pricing/on-demand/",
+		unit:      "instances",
+		regions:   regions,
+		skus:      awsInstanceTypes,
+		fetch: func(region, instanceType string) (float64, error) {
+			return getAWSPrice(ctx, client, instanceType, regionToLocation[region])
+		},
+	}, nil
 }
 
 func getAWSPrice(ctx context.Context, client *pricing.Client, instanceType, location string) (float64, error) {
@@ -189,48 +319,37 @@ func parseAWSPriceJSON(priceJSON string) (float64, error) {
 	return 0, fmt.Errorf("no USD price")
 }
 
-func updateAzure() error {
+var azureRegions = []string{
+	"eastus", "eastus2", "westus", "westus2",
+	"northeurope", "westeurope", "uksouth", "germanywestcentral",
+	"southeastasia", "japaneast", "australiaeast",
+}
+
+var azureVMSizes = []string{
+	"Standard_B1s", "Standard_B1ms", "Standard_B2s", "Standard_B2ms", "Standard_B4ms",
+	"Standard_D2s_v3", "Standard_D4s_v3", "Standard_D8s_v3",
+	"Standard_D2s_v4", "Standard_D4s_v4",
+	"Standard_D2s_v5", "Standard_D4s_v5", "Standard_D8s_v5",
+	"Standard_D2as_v4", "Standard_D4as_v4",
+	"Standard_D2as_v5", "Standard_D4as_v5",
+	"Standard_E2s_v3", "Standard_E4s_v3", "Standard_E8s_v3",
+	"Standard_E2s_v4", "Standard_E4s_v4",
+	"Standard_E2s_v5", "Standard_E4s_v5",
+	"Standard_F2s_v2", "Standard_F4s_v2", "Standard_F8s_v2",
+}
+
+func azureSpec() catalogSpec {
 	fmt.Println("Fetching Azure prices...")
 
-	prices := make(map[string]map[string]float64)
-
-	azureRegions := []string{
-		"eastus", "eastus2", "westus", "westus2",
-		"northeurope", "westeurope", "uksouth", "germanywestcentral",
-		"southeastasia", "japaneast", "australiaeast",
+	return catalogSpec{
+		path:      azureCatalogPath,
+		cloudName: "Azure VM",
+		source:    "https://azure.microsoft.com/pricing/details/virtual-machines/linux/",
+		unit:      "VM sizes",
+		regions:   azureRegions,
+		skus:      azureVMSizes,
+		fetch:     getAzurePrice,
 	}
-
-	vmSizes := []string{
-		"Standard_B1s", "Standard_B1ms", "Standard_B2s", "Standard_B2ms", "Standard_B4ms",
-		"Standard_D2s_v3", "Standard_D4s_v3", "Standard_D8s_v3",
-		"Standard_D2s_v4", "Standard_D4s_v4",
-		"Standard_D2s_v5", "Standard_D4s_v5", "Standard_D8s_v5",
-		"Standard_D2as_v4", "Standard_D4as_v4",
-		"Standard_D2as_v5", "Standard_D4as_v5",
-		"Standard_E2s_v3", "Standard_E4s_v3", "Standard_E8s_v3",
-		"Standard_E2s_v4", "Standard_E4s_v4",
-		"Standard_E2s_v5", "Standard_E4s_v5",
-		"Standard_F2s_v2", "Standard_F4s_v2", "Standard_F8s_v2",
-	}
-
-	for _, region := range azureRegions {
-		regionPrices := make(map[string]float64)
-
-		for _, vmSize := range vmSizes {
-			price, err := getAzurePrice(region, vmSize)
-			if err != nil {
-				continue
-			}
-			regionPrices[vmSize] = price
-		}
-
-		if len(regionPrices) > 0 {
-			prices[region] = regionPrices
-			fmt.Printf("  %s: %d VM sizes\n", region, len(regionPrices))
-		}
-	}
-
-	return writeYAML("internal/pricing/data/azure.yaml", prices, "Azure VM", "https://azure.microsoft.com/pricing/details/virtual-machines/linux/")
 }
 
 func getAzurePrice(region, vmSize string) (float64, error) {
@@ -260,32 +379,14 @@ func getAzurePrice(region, vmSize string) (float64, error) {
 	}
 
 	var result struct {
-		Items []struct {
-			RetailPrice float64 `json:"retailPrice"`
-			SkuName     string  `json:"skuName"`
-			ProductName string  `json:"productName"`
-		} `json:"Items"`
+		Items []burnpricing.AzurePriceItem `json:"Items"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
 		return 0, err
 	}
 
-	for _, item := range result.Items {
-		// Skip Spot and Low Priority
-		if strings.Contains(item.SkuName, "Spot") || strings.Contains(item.SkuName, "Low Priority") {
-			continue
-		}
-		// Skip Windows
-		if strings.Contains(item.ProductName, "Windows") {
-			continue
-		}
-		if item.RetailPrice > 0 {
-			return item.RetailPrice, nil
-		}
-	}
-
-	return 0, fmt.Errorf("no price found")
+	return burnpricing.SelectAzureVMPrice(result.Items, false)
 }
 
 func writeYAML(path string, prices map[string]map[string]float64, cloudName, source string) error {

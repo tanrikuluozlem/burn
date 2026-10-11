@@ -96,3 +96,54 @@ func TestGetEmbeddedPrice_UnknownCloud(t *testing.T) {
 		t.Error("expected error for unknown cloud")
 	}
 }
+
+func TestGetEmbeddedPrice_VerifiedEntries(t *testing.T) {
+	tests := []struct {
+		cloud        string
+		region       string
+		instanceType string
+		wantPrice    float64
+	}{
+		{"aws", "eu-west-2", "r5.large", 0.148},
+		{"aws", "sa-east-1", "r5.2xlarge", 0.804},
+		{"azure", "eastus2", "Standard_E2s_v4", 0.126},
+		{"azure", "northeurope", "Standard_D4as_v4", 0.214},
+		{"azure", "northeurope", "Standard_D4s_v3", 0.214},
+		{"azure", "northeurope", "Standard_E2s_v3", 0.141},
+		{"azure", "uksouth", "Standard_D4s_v5", 0.222},
+		{"azure", "westeurope", "Standard_D2as_v5", 0.104},
+		{"azure", "westus", "Standard_B2ms", 0.0992},
+		{"azure", "australiaeast", "Standard_D2as_v5", 0.108},
+		{"azure", "eastus", "Standard_D4as_v5", 0.172},
+		{"azure", "germanywestcentral", "Standard_D2as_v5", 0.104},
+		{"azure", "northeurope", "Standard_D4as_v5", 0.192},
+		{"azure", "southeastasia", "Standard_D2as_v5", 0.108},
+		{"azure", "southeastasia", "Standard_D4as_v5", 0.216},
+		{"azure", "uksouth", "Standard_D2as_v5", 0.1},
+		{"azure", "westeurope", "Standard_D4as_v5", 0.208},
+		{"azure", "westus", "Standard_D2as_v5", 0.101},
+		{"azure", "westus2", "Standard_D4as_v5", 0.172},
+	}
+
+	for _, tt := range tests {
+		price, err := GetEmbeddedPrice(tt.cloud, tt.region, tt.instanceType)
+		if err != nil {
+			t.Errorf("GetEmbeddedPrice(%s, %s, %s) error = %v", tt.cloud, tt.region, tt.instanceType, err)
+			continue
+		}
+		if price != tt.wantPrice {
+			t.Errorf("GetEmbeddedPrice(%s, %s, %s) = %v, want %v",
+				tt.cloud, tt.region, tt.instanceType, price, tt.wantPrice)
+		}
+	}
+}
+
+func TestGetEmbeddedPrice_WestEuropeD2asV5NotCloudServices(t *testing.T) {
+	price, err := GetEmbeddedPrice("azure", "westeurope", "Standard_D2as_v5")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if price != 0.104 {
+		t.Errorf("westeurope/Standard_D2as_v5 = %v, want 0.104", price)
+	}
+}

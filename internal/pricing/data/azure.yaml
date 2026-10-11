@@ -10,7 +10,7 @@ australiaeast:
     Standard_B2s: 0.0528
     Standard_B4ms: 0.211
     Standard_D2as_v4: 0.12
-    Standard_D2as_v5: 0.2
+    Standard_D2as_v5: 0.108
     Standard_D2s_v3: 0.125
     Standard_D2s_v4: 0.12
     Standard_D2s_v5: 0.12
@@ -44,7 +44,7 @@ eastus:
     Standard_D2s_v4: 0.096
     Standard_D2s_v5: 0.096
     Standard_D4as_v4: 0.192
-    Standard_D4as_v5: 0.356
+    Standard_D4as_v5: 0.172
     Standard_D4s_v3: 0.192
     Standard_D4s_v4: 0.192
     Standard_D4s_v5: 0.192
@@ -80,6 +80,7 @@ eastus2:
     Standard_D8s_v3: 0.384
     Standard_D8s_v5: 0.384
     Standard_E2s_v3: 0.133
+    Standard_E2s_v4: 0.126
     Standard_E2s_v5: 0.126
     Standard_E4s_v3: 0.266
     Standard_E4s_v4: 0.252
@@ -96,7 +97,7 @@ germanywestcentral:
     Standard_B2s: 0.048
     Standard_B4ms: 0.192
     Standard_D2as_v4: 0.104
-    Standard_D2as_v5: 0.196
+    Standard_D2as_v5: 0.104
     Standard_D2s_v3: 0.115
     Standard_D2s_v4: 0.115
     Standard_D2s_v5: 0.115
@@ -158,11 +159,14 @@ northeurope:
     Standard_D2s_v3: 0.107
     Standard_D2s_v4: 0.107
     Standard_D2s_v5: 0.107
-    Standard_D4as_v5: 0.376
+    Standard_D4as_v4: 0.214
+    Standard_D4as_v5: 0.192
+    Standard_D4s_v3: 0.214
     Standard_D4s_v4: 0.214
     Standard_D4s_v5: 0.214
     Standard_D8s_v3: 0.428
     Standard_D8s_v5: 0.428
+    Standard_E2s_v3: 0.141
     Standard_E2s_v4: 0.141
     Standard_E2s_v5: 0.141
     Standard_E4s_v3: 0.282
@@ -180,12 +184,12 @@ southeastasia:
     Standard_B2s: 0.0528
     Standard_B4ms: 0.211
     Standard_D2as_v4: 0.12
-    Standard_D2as_v5: 0.2
+    Standard_D2as_v5: 0.108
     Standard_D2s_v3: 0.125
     Standard_D2s_v4: 0.12
     Standard_D2s_v5: 0.12
     Standard_D4as_v4: 0.24
-    Standard_D4as_v5: 0.4
+    Standard_D4as_v5: 0.216
     Standard_D4s_v3: 0.25
     Standard_D4s_v4: 0.24
     Standard_D4s_v5: 0.24
@@ -209,7 +213,7 @@ uksouth:
     Standard_B2s: 0.0472
     Standard_B4ms: 0.189
     Standard_D2as_v4: 0.111
-    Standard_D2as_v5: 0.192
+    Standard_D2as_v5: 0.1
     Standard_D2s_v3: 0.116
     Standard_D2s_v4: 0.111
     Standard_D2s_v5: 0.111
@@ -217,6 +221,7 @@ uksouth:
     Standard_D4as_v5: 0.2
     Standard_D4s_v3: 0.232
     Standard_D4s_v4: 0.222
+    Standard_D4s_v5: 0.222
     Standard_D8s_v3: 0.464
     Standard_D8s_v5: 0.444
     Standard_E2s_v3: 0.156
@@ -237,11 +242,12 @@ westeurope:
     Standard_B2s: 0.048
     Standard_B4ms: 0.192
     Standard_D2as_v4: 0.115
+    Standard_D2as_v5: 0.104
     Standard_D2s_v3: 0.12
     Standard_D2s_v4: 0.115
     Standard_D2s_v5: 0.115
     Standard_D4as_v4: 0.23
-    Standard_D4as_v5: 0.392
+    Standard_D4as_v5: 0.208
     Standard_D4s_v3: 0.24
     Standard_D4s_v4: 0.23
     Standard_D4s_v5: 0.23
@@ -261,10 +267,11 @@ westeurope:
 westus:
     Standard_B1ms: 0.0248
     Standard_B1s: 0.0124
+    Standard_B2ms: 0.0992
     Standard_B2s: 0.0496
     Standard_B4ms: 0.198
     Standard_D2as_v4: 0.112
-    Standard_D2as_v5: 0.193
+    Standard_D2as_v5: 0.101
     Standard_D2s_v3: 0.117
     Standard_D2s_v4: 0.112
     Standard_D2s_v5: 0.112
@@ -298,7 +305,7 @@ westus2:
     Standard_D2s_v4: 0.096
     Standard_D2s_v5: 0.096
     Standard_D4as_v4: 0.192
-    Standard_D4as_v5: 0.356
+    Standard_D4as_v5: 0.172
     Standard_D4s_v3: 0.192
     Standard_D4s_v4: 0.192
     Standard_D4s_v5: 0.192

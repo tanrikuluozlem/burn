@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,15 +15,17 @@ import (
 const azurePricingAPI = "https://prices.azure.com/api/retail/prices"
 
 type AzureProvider struct {
-	client *http.Client
-	cache  map[string]cachedPrice
-	mu     sync.RWMutex
+	client  *http.Client
+	baseURL string
+	cache   map[string]cachedPrice
+	mu      sync.RWMutex
 }
 
 func NewAzureProvider() *AzureProvider {
 	return &AzureProvider{
-		client: &http.Client{Timeout: 10 * time.Second},
-		cache:  make(map[string]cachedPrice),
+		client:  &http.Client{Timeout: 10 * time.Second},
+		baseURL: azurePricingAPI,
+		cache:   make(map[string]cachedPrice),
 	}
 }
 
@@ -56,7 +59,7 @@ func (p *AzureProvider) fetchPrice(ctx context.Context, vmSize, region string, i
 		"serviceName eq 'Virtual Machines' and armRegionName eq '%s' and armSkuName eq '%s' and priceType eq 'Consumption'",
 		region, vmSize,
 	)
-	reqURL := fmt.Sprintf("%s?$filter=%s", azurePricingAPI, url.QueryEscape(filter))
+	reqURL := fmt.Sprintf("%s?$filter=%s", p.baseURL, url.QueryEscape(filter))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -78,35 +81,78 @@ func (p *AzureProvider) fetchPrice(ctx context.Context, vmSize, region string, i
 		return 0, err
 	}
 
-	// Find the correct price: Linux, not Low Priority, not Spot (unless we want Spot)
-	for _, item := range result.Items {
-		if item.ProductName == "" || isWindowsProduct(item.ProductName) {
-			continue
-		}
-		// For on-demand, we want the base SKU (no "Low Priority" or "Spot" in skuName)
-		// For spot, we want "Spot" in skuName
-		if isSpot {
-			if containsSpot(item.SkuName) {
-				return item.RetailPrice, nil
-			}
-		} else {
-			if !containsSpot(item.SkuName) && !containsLowPriority(item.SkuName) {
-				return item.RetailPrice, nil
-			}
-		}
+	price, err := SelectAzureVMPrice(result.Items, isSpot)
+	if err != nil {
+		return 0, fmt.Errorf("azure pricing for %s in %s: %w", vmSize, region, err)
 	}
-	return 0, fmt.Errorf("no pricing for %s in %s", vmSize, region)
+	return price, nil
 }
 
 type azurePricingResponse struct {
-	Items []azurePriceItem `json:"Items"`
+	Items []AzurePriceItem `json:"Items"`
 }
 
-type azurePriceItem struct {
+// AzurePriceItem represents an Azure Retail Prices API item.
+type AzurePriceItem struct {
 	RetailPrice     float64 `json:"retailPrice"`
 	ProductName     string  `json:"productName"`
 	SkuName         string  `json:"skuName"`
+	Type            string  `json:"type"`
 	ReservationTerm string  `json:"reservationTerm"`
+}
+
+func isAzureVMCandidate(item AzurePriceItem, isSpot bool) bool {
+	if item.Type != "Consumption" {
+		return false
+	}
+	if !strings.HasPrefix(item.ProductName, "Virtual Machines ") {
+		return false
+	}
+	if strings.Contains(item.ProductName, "Windows") {
+		return false
+	}
+	// Azure may return Cloud Services prices for the same ARM SKU.
+	if strings.Contains(item.ProductName, "Cloud Services") {
+		return false
+	}
+	if item.RetailPrice <= 0 {
+		return false
+	}
+	if isSpot {
+		return containsSpot(item.SkuName)
+	}
+	return !containsSpot(item.SkuName) && !containsLowPriority(item.SkuName)
+}
+
+// SelectAzureVMPrice returns the Linux VM price for a SKU.
+func SelectAzureVMPrice(items []AzurePriceItem, isSpot bool) (float64, error) {
+	var prices []float64
+	seen := make(map[float64]bool)
+	for _, item := range items {
+		if !isAzureVMCandidate(item, isSpot) {
+			continue
+		}
+		if seen[item.RetailPrice] {
+			continue
+		}
+		seen[item.RetailPrice] = true
+		prices = append(prices, item.RetailPrice)
+	}
+
+	mode := "on-demand"
+	if isSpot {
+		mode = "spot"
+	}
+
+	switch len(prices) {
+	case 0:
+		return 0, fmt.Errorf("no Linux Virtual Machines %s price in response", mode)
+	case 1:
+		return prices[0], nil
+	default:
+		sort.Float64s(prices)
+		return 0, fmt.Errorf("ambiguous Linux Virtual Machines %s price: %v", mode, prices)
+	}
 }
 
 func (p *AzureProvider) GetDiskPrice(ctx context.Context, diskType, region string) (float64, error) {
@@ -126,7 +172,7 @@ func (p *AzureProvider) GetDiskPrice(ctx context.Context, diskType, region strin
 		"serviceName eq 'Storage' and armRegionName eq '%s' and meterName eq '%s' and priceType eq 'Consumption'",
 		region, meterFilter,
 	)
-	reqURL := fmt.Sprintf("%s?$filter=%s", azurePricingAPI, url.QueryEscape(filter))
+	reqURL := fmt.Sprintf("%s?$filter=%s", p.baseURL, url.QueryEscape(filter))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -183,11 +229,11 @@ func azureDiskMeter(diskType string) string {
 // azureDiskTierGiB returns the capacity of an Azure managed disk tier.
 func azureDiskTierGiB(meter string) float64 {
 	tiers := map[string]float64{
-		"P4 LRS Disk":  32, "P6 LRS Disk": 64, "P10 LRS Disk": 128,
+		"P4 LRS Disk": 32, "P6 LRS Disk": 64, "P10 LRS Disk": 128,
 		"P15 LRS Disk": 256, "P20 LRS Disk": 512,
-		"E4 LRS Disk":  32, "E6 LRS Disk": 64, "E10 LRS Disk": 128,
+		"E4 LRS Disk": 32, "E6 LRS Disk": 64, "E10 LRS Disk": 128,
 		"E15 LRS Disk": 256, "E20 LRS Disk": 512,
-		"S4 LRS Disk":  32, "S6 LRS Disk": 64, "S10 LRS Disk": 128,
+		"S4 LRS Disk": 32, "S6 LRS Disk": 64, "S10 LRS Disk": 128,
 		"S15 LRS Disk": 256, "S20 LRS Disk": 512,
 	}
 	if g, ok := tiers[meter]; ok {
@@ -212,7 +258,7 @@ func (p *AzureProvider) GetRIMonthlyPrice(ctx context.Context, vmSize, region st
 		"serviceName eq 'Virtual Machines' and armRegionName eq '%s' and armSkuName eq '%s' and priceType eq 'Reservation' and reservationTerm eq '1 Year'",
 		region, vmSize,
 	)
-	reqURL := fmt.Sprintf("%s?$filter=%s", azurePricingAPI, url.QueryEscape(filter))
+	reqURL := fmt.Sprintf("%s?$filter=%s", p.baseURL, url.QueryEscape(filter))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {

@@ -19,9 +19,13 @@ import (
 
 type AWSProvider struct {
 	pricingClient *pricing.Client
-	ec2Clients    map[string]*ec2.Client
+	ec2Clients    map[string]spotPriceHistoryAPI
 	cache         map[string]cachedPrice
 	mu            sync.RWMutex
+}
+
+type spotPriceHistoryAPI interface {
+	DescribeSpotPriceHistory(ctx context.Context, params *ec2.DescribeSpotPriceHistoryInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSpotPriceHistoryOutput, error)
 }
 
 type cachedPrice struct {
@@ -50,13 +54,24 @@ func NewAWSProvider(ctx context.Context) (*AWSProvider, error) {
 
 	return &AWSProvider{
 		pricingClient: pricing.NewFromConfig(cfg),
-		ec2Clients:    make(map[string]*ec2.Client),
+		ec2Clients:    make(map[string]spotPriceHistoryAPI),
 		cache:         make(map[string]cachedPrice),
 	}, nil
 }
 
+func priceCacheKey(instanceType, region, zone string, isSpot bool) string {
+	if !isSpot {
+		zone = ""
+	}
+	return fmt.Sprintf("%s:%s:%s:%v", instanceType, region, zone, isSpot)
+}
+
 func (p *AWSProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
-	key := fmt.Sprintf("%s:%s:%v", instanceType, region, isSpot)
+	return p.getHourlyPrice(ctx, instanceType, region, "", isSpot)
+}
+
+func (p *AWSProvider) getHourlyPrice(ctx context.Context, instanceType, region, zone string, isSpot bool) (float64, error) {
+	key := priceCacheKey(instanceType, region, zone, isSpot)
 
 	p.mu.RLock()
 	if c, ok := p.cache[key]; ok && time.Now().Before(c.expiresAt) {
@@ -68,7 +83,7 @@ func (p *AWSProvider) GetHourlyPrice(ctx context.Context, instanceType, region s
 	var price float64
 	var err error
 	if isSpot {
-		price, err = p.getSpotPrice(ctx, instanceType, region)
+		price, err = p.getSpotPrice(ctx, instanceType, region, zone)
 	} else {
 		price, err = p.getOnDemandPrice(ctx, instanceType, region)
 	}
@@ -143,7 +158,7 @@ func (p *AWSProvider) getOnDemandPrice(ctx context.Context, instanceType, region
 	return parseOnDemandPrice(result.PriceList[0])
 }
 
-func (p *AWSProvider) getSpotPrice(ctx context.Context, instanceType, region string) (float64, error) {
+func (p *AWSProvider) getSpotPrice(ctx context.Context, instanceType, region, zone string) (float64, error) {
 	client, err := p.getEC2Client(ctx, region)
 	if err != nil {
 		return 0, err
@@ -157,6 +172,9 @@ func (p *AWSProvider) getSpotPrice(ctx context.Context, instanceType, region str
 		StartTime:  aws.Time(time.Now().Add(-1 * time.Hour)),
 		MaxResults: aws.Int32(1),
 	}
+	if zone != "" {
+		input.AvailabilityZone = aws.String(zone)
+	}
 
 	result, err := client.DescribeSpotPriceHistory(ctx, input)
 	if err != nil {
@@ -168,7 +186,7 @@ func (p *AWSProvider) getSpotPrice(ctx context.Context, instanceType, region str
 	return strconv.ParseFloat(*result.SpotPriceHistory[0].SpotPrice, 64)
 }
 
-func (p *AWSProvider) getEC2Client(ctx context.Context, region string) (*ec2.Client, error) {
+func (p *AWSProvider) getEC2Client(ctx context.Context, region string) (spotPriceHistoryAPI, error) {
 	p.mu.RLock()
 	if c, ok := p.ec2Clients[region]; ok {
 		p.mu.RUnlock()

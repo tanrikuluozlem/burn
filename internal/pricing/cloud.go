@@ -58,10 +58,14 @@ func (p *CloudPricingProvider) detectCloud(node collector.NodeInfo) {
 
 func (p *CloudPricingProvider) GetHourlyPriceForNode(ctx context.Context, node collector.NodeInfo) (float64, error) {
 	p.detectCloud(node)
-	return p.GetHourlyPrice(ctx, node.InstanceType, node.Region, node.IsSpot)
+	return p.hourlyPrice(ctx, node.InstanceType, node.Region, node.Zone, node.IsSpot)
 }
 
 func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType, region string, isSpot bool) (float64, error) {
+	return p.hourlyPrice(ctx, instanceType, region, "", isSpot)
+}
+
+func (p *CloudPricingProvider) hourlyPrice(ctx context.Context, instanceType, region, zone string, isSpot bool) (float64, error) {
 	cloudName := ""
 	switch p.detectedCloud {
 	case collector.CloudAWS:
@@ -77,7 +81,7 @@ func (p *CloudPricingProvider) GetHourlyPrice(ctx context.Context, instanceType,
 		case collector.CloudAWS:
 			p.initAWS(ctx)
 			if p.aws != nil {
-				if price, err := p.aws.GetHourlyPrice(ctx, instanceType, region, true); err == nil {
+				if price, err := p.aws.getHourlyPrice(ctx, instanceType, region, zone, true); err == nil {
 					return price, nil
 				}
 			}
@@ -271,9 +275,9 @@ func (p *CloudPricingProvider) GetSpotDiscount(ctx context.Context, instanceType
 							irVal = ir
 						}
 						return SpotDiscount{
-							Discount:        discount,
+							Discount:         discount,
 							InterruptionRate: irVal,
-							Source:          "api",
+							Source:           "api",
 						}
 					}
 				}
@@ -287,9 +291,9 @@ func (p *CloudPricingProvider) GetSpotDiscount(ctx context.Context, instanceType
 				discount := 1 - (spotPrice / onDemandPrice)
 				if discount > 0 && discount < 1 {
 					return SpotDiscount{
-						Discount:        discount,
+						Discount:         discount,
 						InterruptionRate: -1,
-						Source:          "api",
+						Source:           "api",
 					}
 				}
 			}
@@ -299,15 +303,15 @@ func (p *CloudPricingProvider) GetSpotDiscount(ctx context.Context, instanceType
 	savings, ir, ok := lookupSpotAdvisor(instanceType, region)
 	if ok && savings > 0 {
 		return SpotDiscount{
-			Discount:        float64(savings) / 100.0,
+			Discount:         float64(savings) / 100.0,
 			InterruptionRate: ir,
-			Source:          "advisor",
+			Source:           "advisor",
 		}
 	}
 
 	return SpotDiscount{
-		Discount:        0,
+		Discount:         0,
 		InterruptionRate: -1,
-		Source:          "unavailable",
+		Source:           "unavailable",
 	}
 }

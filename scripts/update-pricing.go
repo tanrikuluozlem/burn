@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/pricing/types"
 	burnpricing "github.com/tanrikuluozlem/burn/internal/pricing"
+	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,6 +25,8 @@ const (
 	awsCatalogPath   = "internal/pricing/data/aws.yaml"
 	azureCatalogPath = "internal/pricing/data/azure.yaml"
 )
+
+const awsPricingRPS = 3
 
 var awsRegions = []string{
 	"us-east-1", "us-east-2", "us-west-1", "us-west-2",
@@ -72,7 +75,7 @@ func main() {
 
 	target := os.Args[1]
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	var specs []catalogSpec
@@ -238,12 +241,15 @@ func awsSpec(ctx context.Context) (catalogSpec, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion("us-east-1"),
 		config.WithEC2IMDSClientEnableState(imds.ClientDisabled),
+		config.WithRetryMode(aws.RetryModeStandard),
+		config.WithRetryMaxAttempts(5),
 	)
 	if err != nil {
 		return catalogSpec{}, fmt.Errorf("aws config: %w", err)
 	}
 
 	client := pricing.NewFromConfig(cfg)
+	limiter := rate.NewLimiter(awsPricingRPS, 1)
 
 	regions := make([]string, 0, len(awsRegions))
 	for _, region := range awsRegions {
@@ -260,6 +266,9 @@ func awsSpec(ctx context.Context) (catalogSpec, error) {
 		regions:   regions,
 		skus:      awsInstanceTypes,
 		fetch: func(region, instanceType string) (float64, error) {
+			if err := limiter.Wait(ctx); err != nil {
+				return 0, err
+			}
 			return getAWSPrice(ctx, client, instanceType, regionToLocation[region])
 		},
 	}, nil

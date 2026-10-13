@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -317,5 +318,23 @@ func TestLoadExistingCatalogEmpty(t *testing.T) {
 
 	if _, err := loadExistingCatalog(path); err == nil {
 		t.Error("expected an error for a catalog with no regions")
+	}
+}
+
+func TestAWSFetchStopsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	spec, err := awsSpec(ctx)
+	if err != nil {
+		t.Fatalf("awsSpec() error = %v", err)
+	}
+	cancel()
+
+	price, err := spec.fetch("eu-west-2", "r5.large")
+	if err != context.Canceled {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if price != 0 {
+		t.Errorf("price = %v, want 0", price)
 	}
 }

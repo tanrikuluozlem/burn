@@ -95,6 +95,7 @@ type azurePricingResponse struct {
 // AzurePriceItem represents an Azure Retail Prices API item.
 type AzurePriceItem struct {
 	RetailPrice     float64 `json:"retailPrice"`
+	ArmSkuName      string  `json:"armSkuName"`
 	ProductName     string  `json:"productName"`
 	SkuName         string  `json:"skuName"`
 	Type            string  `json:"type"`

@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -36,16 +40,19 @@ func assertUnchanged(t *testing.T, path string, original []byte) {
 	}
 }
 
-func fetchFrom(prices map[string]float64, failures map[string]error) func(string, string) (float64, error) {
-	return func(region, sku string) (float64, error) {
-		key := region + "/" + sku
-		if err, ok := failures[key]; ok {
-			return 0, err
+func fetchFrom(prices map[string]float64, failures map[string]error) func(string, []string) (map[string]float64, error) {
+	return func(region string, skus []string) (map[string]float64, error) {
+		found := make(map[string]float64, len(skus))
+		for _, sku := range skus {
+			key := region + "/" + sku
+			if err, ok := failures[key]; ok {
+				return nil, err
+			}
+			if price, ok := prices[key]; ok {
+				found[sku] = price
+			}
 		}
-		if price, ok := prices[key]; ok {
-			return price, nil
-		}
-		return 0, fmt.Errorf("no price for %s", key)
+		return found, nil
 	}
 }
 
@@ -330,11 +337,195 @@ func TestAWSFetchStopsOnCancelledContext(t *testing.T) {
 	}
 	cancel()
 
-	price, err := spec.fetch("eu-west-2", "r5.large")
+	prices, err := spec.fetch("eu-west-2", []string{"r5.large"})
 	if err != context.Canceled {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if price != 0 {
-		t.Errorf("price = %v, want 0", price)
+	if prices != nil {
+		t.Errorf("prices = %v, want nil", prices)
+	}
+}
+
+func azureClientAt(baseURL string) *azureClient {
+	return &azureClient{
+		http:       http.DefaultClient,
+		baseURL:    baseURL,
+		maxRetries: azureMaxRetries,
+		retryWait:  time.Millisecond,
+		retryCap:   time.Millisecond,
+	}
+}
+
+func azurePageBody(next string, prices map[string]float64) string {
+	var items []string
+	for sku, price := range prices {
+		name := strings.TrimPrefix(sku, "Standard_")
+		items = append(items,
+			fmt.Sprintf(`{"armSkuName":%q,"retailPrice":%g,"productName":"Virtual Machines Dsv5 Series Windows","skuName":%q,"type":"Consumption"}`, sku, price*4, name),
+			fmt.Sprintf(`{"armSkuName":%q,"retailPrice":%g,"productName":"Virtual Machines Dsv5 Series","skuName":%q,"type":"Consumption"}`, sku, price, name),
+		)
+	}
+
+	link := "null"
+	if next != "" {
+		link = fmt.Sprintf("%q", next)
+	}
+	return fmt.Sprintf(`{"Items":[%s],"NextPageLink":%s}`, strings.Join(items, ","), link)
+}
+
+func TestAzureClientReportsNonJSONBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, "The service is unavailable.")
+	}))
+	defer srv.Close()
+
+	_, err := azureClientAt(srv.URL).prices(context.Background(), "westeurope", []string{"Standard_D2as_v5"})
+	if err == nil {
+		t.Fatal("expected an error for a non-200 response")
+	}
+	for _, want := range []string{"503", "The service is unavailable."} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Errorf("body was parsed before the status was checked: %v", err)
+	}
+}
+
+func TestAzureClientRetriesThrottledPage(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("x-ms-ratelimit-retailprices-retry-after", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, `{"Error":{"Code":"429","Message":"Too many requests."}}`)
+			return
+		}
+		fmt.Fprint(w, azurePageBody("", map[string]float64{"Standard_D2as_v5": 0.104}))
+	}))
+	defer srv.Close()
+
+	prices, err := azureClientAt(srv.URL).prices(context.Background(), "westeurope", []string{"Standard_D2as_v5"})
+	if err != nil {
+		t.Fatalf("a throttled page should be retried, got %v", err)
+	}
+	if prices["Standard_D2as_v5"] != 0.104 {
+		t.Errorf("price = %v, want 0.104", prices["Standard_D2as_v5"])
+	}
+	if n := atomic.LoadInt32(&calls); n != 2 {
+		t.Errorf("api calls = %d, want 2", n)
+	}
+}
+
+func TestAzureClientGivesUpAfterMaxRetries(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"Error":{"Code":"429","Message":"Too many requests."}}`)
+	}))
+	defer srv.Close()
+
+	_, err := azureClientAt(srv.URL).prices(context.Background(), "westeurope", []string{"Standard_D2as_v5"})
+	if err == nil {
+		t.Fatal("expected the refresh to fail once retries run out")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("error %q does not name the status", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != azureMaxRetries+1 {
+		t.Errorf("api calls = %d, want %d", n, azureMaxRetries+1)
+	}
+}
+
+func TestAzureClientFetchesBatchInOneRequest(t *testing.T) {
+	want := map[string]float64{"Standard_B2s": 0.0416, "Standard_D2as_v5": 0.104}
+
+	var calls int32
+	var gotFilter string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		gotFilter = r.URL.Query().Get("$filter")
+		fmt.Fprint(w, azurePageBody("", want))
+	}))
+	defer srv.Close()
+
+	prices, err := azureClientAt(srv.URL).prices(context.Background(), "westeurope", []string{"Standard_B2s", "Standard_D2as_v5"})
+	if err != nil {
+		t.Fatalf("prices() error = %v", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("api calls = %d, want 1 for the whole batch", n)
+	}
+	for sku, price := range want {
+		if prices[sku] != price {
+			t.Errorf("%s = %v, want %v", sku, prices[sku], price)
+		}
+	}
+	for _, clause := range []string{
+		"armRegionName eq 'westeurope'",
+		"armSkuName eq 'Standard_B2s'",
+		"armSkuName eq 'Standard_D2as_v5'",
+	} {
+		if !strings.Contains(gotFilter, clause) {
+			t.Errorf("$filter missing %q, got %q", clause, gotFilter)
+		}
+	}
+}
+
+func TestAzureClientFollowsNextPageLink(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			fmt.Fprint(w, azurePageBody("http://"+r.Host+"/page2", map[string]float64{"Standard_B2s": 0.0416}))
+			return
+		}
+		fmt.Fprint(w, azurePageBody("", map[string]float64{"Standard_D2as_v5": 0.104}))
+	}))
+	defer srv.Close()
+
+	prices, err := azureClientAt(srv.URL).prices(context.Background(), "westeurope", []string{"Standard_B2s", "Standard_D2as_v5"})
+	if err != nil {
+		t.Fatalf("prices() error = %v", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 2 {
+		t.Errorf("api calls = %d, want 2", n)
+	}
+	if prices["Standard_D2as_v5"] != 0.104 {
+		t.Errorf("a price from the second page was dropped: %v", prices)
+	}
+}
+
+func TestAzureRetryDelay(t *testing.T) {
+	client := &azureClient{retryWait: azureRetryWait, retryCap: azureRetryCap}
+
+	tests := []struct {
+		name   string
+		header http.Header
+		want   time.Duration
+	}{
+		{"azure header", http.Header{"X-Ms-Ratelimit-Retailprices-Retry-After": {"30"}}, 30 * time.Second},
+		{"standard header", http.Header{"Retry-After": {"5"}}, 5 * time.Second},
+		{"capped", http.Header{"X-Ms-Ratelimit-Retailprices-Retry-After": {"600"}}, azureRetryCap},
+		{"no header", http.Header{}, azureRetryWait},
+	}
+
+	for _, tt := range tests {
+		if got := client.retryDelay(tt.header); got != tt.want {
+			t.Errorf("%s: retryDelay() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestAWSFetchesOneInstanceTypePerCall(t *testing.T) {
+	spec, err := awsSpec(context.Background())
+	if err != nil {
+		t.Fatalf("awsSpec() error = %v", err)
+	}
+	if spec.batchSize != 1 {
+		t.Errorf("batchSize = %d, want 1: a larger batch would discard prices already fetched when a later lookup fails", spec.batchSize)
 	}
 }

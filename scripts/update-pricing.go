@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +30,20 @@ const (
 )
 
 const awsPricingRPS = 3
+
+const (
+	azurePricingAPI = "https://prices.azure.com/api/retail/prices"
+	// The Retail Prices API rejects a filter holding more than 17 armSkuName
+	// clauses, so batches stay well below that.
+	azureBatchSize   = 10
+	azureMaxRetries  = 4
+	azureRetryWait   = 2 * time.Second
+	azureRetryCap    = 60 * time.Second
+	azureTimeout     = 30 * time.Second
+	azureBodyPreview = 200
+)
+
+var errNoPrice = errors.New("no pricing found")
 
 var awsRegions = []string{
 	"us-east-1", "us-east-2", "us-west-1", "us-west-2",
@@ -88,14 +105,14 @@ func main() {
 		}
 		specs = []catalogSpec{spec}
 	case "azure":
-		specs = []catalogSpec{azureSpec()}
+		specs = []catalogSpec{azureSpec(ctx)}
 	case "all":
 		spec, err := awsSpec(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "AWS error: %v\n", err)
 			os.Exit(1)
 		}
-		specs = []catalogSpec{spec, azureSpec()}
+		specs = []catalogSpec{spec, azureSpec(ctx)}
 		fmt.Println("GCP: manual update required (no public API)")
 	default:
 		fmt.Printf("Unknown target: %s\n", target)
@@ -115,7 +132,8 @@ type catalogSpec struct {
 	unit      string
 	regions   []string
 	skus      []string
-	fetch     func(region, sku string) (float64, error)
+	batchSize int
+	fetch     func(region string, skus []string) (map[string]float64, error)
 }
 
 func runRefresh(specs []catalogSpec) error {
@@ -155,20 +173,31 @@ func loadExistingCatalog(path string) (map[string]map[string]float64, error) {
 func buildCatalog(spec catalogSpec, previous map[string]map[string]float64) (prices map[string]map[string]float64, blocking, absent []string) {
 	prices = make(map[string]map[string]float64)
 
+	size := max(spec.batchSize, 1)
+
 	for _, region := range spec.regions {
 		regionPrices := make(map[string]float64)
-		for _, sku := range spec.skus {
-			price, err := spec.fetch(region, sku)
-			if err != nil {
-				msg := fmt.Sprintf("%s/%s: %v", region, sku, err)
-				if _, known := previous[region][sku]; known {
-					blocking = append(blocking, msg)
-				} else {
-					absent = append(absent, msg)
+		for start := 0; start < len(spec.skus); start += size {
+			batch := spec.skus[start:min(start+size, len(spec.skus))]
+
+			fetched, err := spec.fetch(region, batch)
+			for _, sku := range batch {
+				price, ok := fetched[sku]
+				reason := err
+				if reason == nil && !ok {
+					reason = errNoPrice
 				}
-				continue
+				if reason != nil {
+					msg := fmt.Sprintf("%s/%s: %v", region, sku, reason)
+					if _, known := previous[region][sku]; known {
+						blocking = append(blocking, msg)
+					} else {
+						absent = append(absent, msg)
+					}
+					continue
+				}
+				regionPrices[sku] = price
 			}
-			regionPrices[sku] = price
 		}
 		if len(regionPrices) > 0 {
 			prices[region] = regionPrices
@@ -265,11 +294,21 @@ func awsSpec(ctx context.Context) (catalogSpec, error) {
 		unit:      "instances",
 		regions:   regions,
 		skus:      awsInstanceTypes,
-		fetch: func(region, instanceType string) (float64, error) {
-			if err := limiter.Wait(ctx); err != nil {
-				return 0, err
+		// The Pricing API answers one instance type per query.
+		batchSize: 1,
+		fetch: func(region string, instanceTypes []string) (map[string]float64, error) {
+			prices := make(map[string]float64, len(instanceTypes))
+			for _, instanceType := range instanceTypes {
+				if err := limiter.Wait(ctx); err != nil {
+					return nil, err
+				}
+				price, err := getAWSPrice(ctx, client, instanceType, regionToLocation[region])
+				if err != nil {
+					return nil, err
+				}
+				prices[instanceType] = price
 			}
-			return getAWSPrice(ctx, client, instanceType, regionToLocation[region])
+			return prices, nil
 		},
 	}, nil
 }
@@ -347,8 +386,10 @@ var azureVMSizes = []string{
 	"Standard_F2s_v2", "Standard_F4s_v2", "Standard_F8s_v2",
 }
 
-func azureSpec() catalogSpec {
+func azureSpec(ctx context.Context) catalogSpec {
 	fmt.Println("Fetching Azure prices...")
+
+	client := newAzureClient()
 
 	return catalogSpec{
 		path:      azureCatalogPath,
@@ -357,45 +398,143 @@ func azureSpec() catalogSpec {
 		unit:      "VM sizes",
 		regions:   azureRegions,
 		skus:      azureVMSizes,
-		fetch:     getAzurePrice,
+		batchSize: azureBatchSize,
+		fetch: func(region string, vmSizes []string) (map[string]float64, error) {
+			return client.prices(ctx, region, vmSizes)
+		},
 	}
 }
 
-func getAzurePrice(region, vmSize string) (float64, error) {
-	filter := fmt.Sprintf(
-		"serviceName eq 'Virtual Machines' and armRegionName eq '%s' and armSkuName eq '%s' and priceType eq 'Consumption'",
-		region, vmSize,
-	)
+type azureClient struct {
+	http       *http.Client
+	baseURL    string
+	maxRetries int
+	retryWait  time.Duration
+	retryCap   time.Duration
+}
 
-	req, err := http.NewRequest("GET", "https://prices.azure.com/api/retail/prices", nil)
+func newAzureClient() *azureClient {
+	return &azureClient{
+		http:       &http.Client{Timeout: azureTimeout},
+		baseURL:    azurePricingAPI,
+		maxRetries: azureMaxRetries,
+		retryWait:  azureRetryWait,
+		retryCap:   azureRetryCap,
+	}
+}
+
+func (c *azureClient) prices(ctx context.Context, region string, vmSizes []string) (map[string]float64, error) {
+	items, err := c.items(ctx, region, vmSizes)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	q := req.URL.Query()
-	q.Add("$filter", filter)
-	req.URL.RawQuery = q.Encode()
+	prices := make(map[string]float64, len(vmSizes))
+	for _, vmSize := range vmSizes {
+		group, ok := items[vmSize]
+		if !ok {
+			continue
+		}
+		price, err := burnpricing.SelectAzureVMPrice(group, false)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", vmSize, err)
+		}
+		prices[vmSize] = price
+	}
+	return prices, nil
+}
 
-	resp, err := http.DefaultClient.Do(req)
+func (c *azureClient) items(ctx context.Context, region string, vmSizes []string) (map[string][]burnpricing.AzurePriceItem, error) {
+	clauses := make([]string, len(vmSizes))
+	for i, vmSize := range vmSizes {
+		clauses[i] = fmt.Sprintf("armSkuName eq '%s'", vmSize)
+	}
+	filter := fmt.Sprintf(
+		"serviceName eq 'Virtual Machines' and armRegionName eq '%s' and priceType eq 'Consumption' and (%s)",
+		region, strings.Join(clauses, " or "),
+	)
+
+	items := make(map[string][]burnpricing.AzurePriceItem)
+	next := c.baseURL + "?$filter=" + url.QueryEscape(filter)
+
+	for next != "" {
+		page, err := c.page(ctx, next)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.Items {
+			items[item.ArmSkuName] = append(items[item.ArmSkuName], item)
+		}
+		next = page.NextPageLink
+	}
+	return items, nil
+}
+
+type azurePage struct {
+	Items        []burnpricing.AzurePriceItem `json:"Items"`
+	NextPageLink string                       `json:"NextPageLink"`
+}
+
+func (c *azureClient) page(ctx context.Context, pageURL string) (azurePage, error) {
+	for attempt := 0; ; attempt++ {
+		page, retryIn, err := c.request(ctx, pageURL)
+		if err == nil {
+			return page, nil
+		}
+		if retryIn == 0 || attempt == c.maxRetries {
+			return azurePage{}, err
+		}
+
+		fmt.Printf("  %v; retrying in %s (attempt %d/%d)\n", err, retryIn, attempt+1, c.maxRetries)
+		select {
+		case <-ctx.Done():
+			return azurePage{}, ctx.Err()
+		case <-time.After(retryIn):
+		}
+	}
+}
+
+// request reports a non-zero retryIn when the status is worth another attempt.
+func (c *azureClient) request(ctx context.Context, pageURL string) (azurePage, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
-		return 0, err
+		return azurePage{}, 0, err
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return azurePage{}, 0, err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, azureBodyPreview))
+		err := fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			return azurePage{}, c.retryDelay(resp.Header), err
+		}
+		return azurePage{}, 0, err
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, err
+		return azurePage{}, 0, err
 	}
 
-	var result struct {
-		Items []burnpricing.AzurePriceItem `json:"Items"`
+	var page azurePage
+	if err := json.Unmarshal(body, &page); err != nil {
+		return azurePage{}, 0, fmt.Errorf("%w (body: %.*s)", err, azureBodyPreview, body)
 	}
+	return page, 0, nil
+}
 
-	if err := json.Unmarshal(body, &result); err != nil {
-		return 0, err
+func (c *azureClient) retryDelay(h http.Header) time.Duration {
+	for _, header := range []string{"x-ms-ratelimit-retailprices-retry-after", "Retry-After"} {
+		if secs, err := strconv.Atoi(h.Get(header)); err == nil && secs > 0 {
+			return min(time.Duration(secs)*time.Second, c.retryCap)
+		}
 	}
-
-	return burnpricing.SelectAzureVMPrice(result.Items, false)
+	return c.retryWait
 }
 
 func writeYAML(path string, prices map[string]map[string]float64, cloudName, source string) error {

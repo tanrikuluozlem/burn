@@ -92,8 +92,7 @@ type azurePricingResponse struct {
 	Items []AzurePriceItem `json:"Items"`
 }
 
-// AzurePriceItem represents an Azure Retail Prices API item. ArmSkuName is only
-// needed when a response covers more than one VM size.
+// AzurePriceItem represents an Azure Retail Prices API item.
 type AzurePriceItem struct {
 	RetailPrice     float64 `json:"retailPrice"`
 	ArmSkuName      string  `json:"armSkuName"`

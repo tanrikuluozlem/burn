@@ -18,6 +18,17 @@ type SavingsOpportunity struct {
 	Applicable     bool
 	Reason         string
 	AffectedNodes  []string
+	Pods           []PodSaving
+}
+
+// PodSaving is the per-pod right-sizing output. Zero means no recommendation.
+type PodSaving struct {
+	Namespace                string
+	Name                     string
+	RecommendedCPUMillicores float64
+	RecommendedMemBytes      float64
+	CPUSavings               float64
+	MemSavings               float64
 }
 
 type SavingsConfig struct{}
@@ -124,6 +135,7 @@ func calculateRightSizingSavings(report *analyzer.CostReport) *SavingsOpportunit
 func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportunity {
 	var totalSavings float64
 	var affectedPods []string
+	var podDetail []PodSaving
 
 	for _, pod := range report.AllPods {
 		if pod.CPURequest == 0 && pod.MemRequest == 0 {
@@ -131,6 +143,7 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 		}
 
 		var cpuSavings, ramSavings float64
+		var recommendedCPU, recommendedMem float64
 
 		// CPU: recommend only when P95 was measured and is positive
 		if pod.CPUP95Available && pod.CPUP95Usage > 0 &&
@@ -138,6 +151,7 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 			recommended := pod.CPUP95Usage * 1.5 * 1000 // p95 * 1.5 in millicores
 			if recommended < float64(pod.CPURequest) {
 				cpuSavings = pod.CPUCost * (1.0 - recommended/float64(pod.CPURequest))
+				recommendedCPU = recommended
 			}
 		}
 
@@ -147,6 +161,7 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 			recommended := float64(pod.MemoryP95Usage) * 1.5
 			if recommended < float64(pod.MemRequest) {
 				ramSavings = pod.RAMCost * (1.0 - recommended/float64(pod.MemRequest))
+				recommendedMem = recommended
 			}
 		}
 
@@ -154,6 +169,14 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 		if podSavings > 1.0 { // ignore trivial savings < $1/mo
 			totalSavings += podSavings
 			affectedPods = append(affectedPods, pod.Namespace+"/"+pod.Name)
+			podDetail = append(podDetail, PodSaving{
+				Namespace:                pod.Namespace,
+				Name:                     pod.Name,
+				RecommendedCPUMillicores: recommendedCPU,
+				RecommendedMemBytes:      recommendedMem,
+				CPUSavings:               cpuSavings,
+				MemSavings:               ramSavings,
+			})
 		}
 	}
 
@@ -171,6 +194,7 @@ func calculatePodRightSizingSavings(report *analyzer.CostReport) *SavingsOpportu
 		Applicable:     true,
 		Reason:         fmt.Sprintf("Downsize %d over-provisioned pods (usage-based recommendations)", len(affectedPods)),
 		AffectedNodes:  affectedPods,
+		Pods:           podDetail,
 	}
 }
 

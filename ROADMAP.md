@@ -9,8 +9,8 @@ These are the areas I'm currently planning to work on next. Priorities may chang
   - Autonomous investigation and evidence-based optimization planning
   - Workload-aware rightsizing with reliability guardrails
   - Human-approved execution through GitOps
-  - Policy-driven autonomous execution (planned)
-  - Post-deployment verification of workload health and performance
+  - Policy-driven autonomous execution
+  - Post-deployment verification of workload health and reliability
   - Reconciliation of estimated savings against actual cloud billing data
 
 Agentic workflows will be opt-in, with configurable levels of autonomy. Burn's core CLI will remain agentless and read-only.

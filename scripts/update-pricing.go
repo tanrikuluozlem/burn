@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,10 +36,11 @@ const (
 	azurePricingAPI = "https://prices.azure.com/api/retail/prices"
 	// The Retail Prices API rejects a filter holding more than 17 armSkuName
 	// clauses, so batches stay well below that.
-	azureBatchSize   = 10
+	azureBatchSize = 10
+	// The API throttles but publishes no limit, so this rate is empirical.
+	azurePricingRPS  = 1
 	azureMaxRetries  = 4
 	azureRetryWait   = 2 * time.Second
-	azureRetryCap    = 60 * time.Second
 	azureTimeout     = 30 * time.Second
 	azureBodyPreview = 200
 )
@@ -92,7 +94,7 @@ func main() {
 
 	target := os.Args[1]
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout(target))
 	defer cancel()
 
 	var specs []catalogSpec
@@ -386,6 +388,14 @@ var azureVMSizes = []string{
 	"Standard_F2s_v2", "Standard_F4s_v2", "Standard_F8s_v2",
 }
 
+// Azure's throttle backoff needs more of the job budget than the AWS run.
+func refreshTimeout(target string) time.Duration {
+	if target == "azure" {
+		return 12 * time.Minute
+	}
+	return 10 * time.Minute
+}
+
 func azureSpec(ctx context.Context) catalogSpec {
 	fmt.Println("Fetching Azure prices...")
 
@@ -410,7 +420,7 @@ type azureClient struct {
 	baseURL    string
 	maxRetries int
 	retryWait  time.Duration
-	retryCap   time.Duration
+	limiter    *rate.Limiter
 }
 
 func newAzureClient() *azureClient {
@@ -419,7 +429,7 @@ func newAzureClient() *azureClient {
 		baseURL:    azurePricingAPI,
 		maxRetries: azureMaxRetries,
 		retryWait:  azureRetryWait,
-		retryCap:   azureRetryCap,
+		limiter:    rate.NewLimiter(azurePricingRPS, 1),
 	}
 }
 
@@ -481,8 +491,12 @@ func (c *azureClient) page(ctx context.Context, pageURL string) (azurePage, erro
 		if err == nil {
 			return page, nil
 		}
-		if retryIn == 0 || attempt == c.maxRetries {
+		if retryIn == noRetry || attempt == c.maxRetries {
 			return azurePage{}, err
+		}
+		// Never retry sooner than the server asked.
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < retryIn {
+			return azurePage{}, fmt.Errorf("%w (retry after %s exceeds the remaining budget)", err, retryIn)
 		}
 
 		fmt.Printf("  %v; retrying in %s (attempt %d/%d)\n", err, retryIn, attempt+1, c.maxRetries)
@@ -494,16 +508,22 @@ func (c *azureClient) page(ctx context.Context, pageURL string) (azurePage, erro
 	}
 }
 
-// request reports a non-zero retryIn when the status is worth another attempt.
+// request reports the delay the server asked for, or noRetry when another
+// attempt is pointless.
 func (c *azureClient) request(ctx context.Context, pageURL string) (azurePage, time.Duration, error) {
+	// Paces retries and page follows too.
+	if err := c.limiter.Wait(ctx); err != nil {
+		return azurePage{}, noRetry, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
-		return azurePage{}, 0, err
+		return azurePage{}, noRetry, err
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return azurePage{}, 0, err
+		return azurePage{}, noRetry, err
 	}
 	defer resp.Body.Close()
 
@@ -513,25 +533,53 @@ func (c *azureClient) request(ctx context.Context, pageURL string) (azurePage, t
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			return azurePage{}, c.retryDelay(resp.Header), err
 		}
-		return azurePage{}, 0, err
+		return azurePage{}, noRetry, err
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return azurePage{}, 0, err
+		return azurePage{}, noRetry, err
 	}
 
 	var page azurePage
 	if err := json.Unmarshal(body, &page); err != nil {
-		return azurePage{}, 0, fmt.Errorf("%w (body: %.*s)", err, azureBodyPreview, body)
+		return azurePage{}, noRetry, fmt.Errorf("%w (body: %.*s)", err, azureBodyPreview, body)
 	}
-	return page, 0, nil
+	return page, noRetry, nil
 }
 
+const (
+	// noRetry keeps "do not retry" distinct from a zero delay, which a date
+	// already in the past is.
+	noRetry = time.Duration(-1)
+	// Beyond this a Duration overflows.
+	maxRetryAfterSeconds = math.MaxInt64 / int64(time.Second)
+)
+
+// retryDelay reads the delay the server asked for. An unrepresentable delay
+// returns noRetry: any wait we could manage would be shorter than instructed.
 func (c *azureClient) retryDelay(h http.Header) time.Duration {
-	for _, header := range []string{"x-ms-ratelimit-retailprices-retry-after", "Retry-After"} {
-		if secs, err := strconv.Atoi(h.Get(header)); err == nil && secs > 0 {
-			return min(time.Duration(secs)*time.Second, c.retryCap)
+	for _, name := range []string{"x-ms-ratelimit-retailprices-retry-after", "Retry-After"} {
+		value := h.Get(name)
+		if value == "" {
+			continue
+		}
+
+		secs, err := strconv.Atoi(value)
+		if errors.Is(err, strconv.ErrRange) && secs > 0 {
+			return noRetry
+		}
+		if err == nil {
+			if secs < 0 {
+				continue
+			}
+			if int64(secs) > maxRetryAfterSeconds {
+				return noRetry
+			}
+			return time.Duration(secs) * time.Second
+		}
+		if at, err := http.ParseTime(value); err == nil {
+			return max(time.Until(at), 0)
 		}
 	}
 	return c.retryWait

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -352,7 +353,7 @@ func azureClientAt(baseURL string) *azureClient {
 		baseURL:    baseURL,
 		maxRetries: azureMaxRetries,
 		retryWait:  time.Millisecond,
-		retryCap:   time.Millisecond,
+		limiter:    rate.NewLimiter(rate.Inf, 1),
 	}
 }
 
@@ -399,7 +400,7 @@ func TestAzureClientRetriesThrottledPage(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&calls, 1) == 1 {
-			w.Header().Set("x-ms-ratelimit-retailprices-retry-after", "60")
+			w.Header().Set("x-ms-ratelimit-retailprices-retry-after", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 			fmt.Fprint(w, `{"Error":{"Code":"429","Message":"Too many requests."}}`)
 			return
@@ -499,8 +500,265 @@ func TestAzureClientFollowsNextPageLink(t *testing.T) {
 	}
 }
 
+func TestAzureClientPacesRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, azurePageBody("", map[string]float64{"Standard_B2s": 0.0416}))
+	}))
+	defer srv.Close()
+
+	client := azureClientAt(srv.URL)
+	client.limiter = rate.NewLimiter(rate.Every(40*time.Millisecond), 1)
+
+	start := time.Now()
+	for range 3 {
+		if _, _, err := client.request(context.Background(), srv.URL); err != nil {
+			t.Fatalf("request() error = %v", err)
+		}
+	}
+
+	// The burst covers the first call, so the other two wait one interval each.
+	if elapsed := time.Since(start); elapsed < 80*time.Millisecond {
+		t.Errorf("three requests took %v, want at least 80ms", elapsed)
+	}
+}
+
+func TestAzureClientStopsOnCancelledContext(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		fmt.Fprint(w, azurePageBody("", map[string]float64{"Standard_B2s": 0.0416}))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := azureClientAt(srv.URL).prices(ctx, "westeurope", []string{"Standard_B2s"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("prices() error = %v, want context.Canceled", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Errorf("api calls = %d, want none after cancellation", n)
+	}
+}
+
+func TestRunRefreshKeepsDataWhenAzureOmitsSKU(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, azurePageBody("", map[string]float64{"Standard_B2s": 0.0416}))
+	}))
+	defer srv.Close()
+
+	path, original := writeCatalog(t, t.TempDir(), "azure.yaml", map[string]map[string]float64{
+		"westeurope": {"Standard_B2s": 0.0416, "Standard_D2as_v5": 0.104},
+	})
+
+	client := azureClientAt(srv.URL)
+	err := runRefresh([]catalogSpec{{
+		path: path, cloudName: "Azure VM", unit: "VM sizes",
+		regions: []string{"westeurope"}, skus: []string{"Standard_B2s", "Standard_D2as_v5"},
+		batchSize: azureBatchSize,
+		fetch: func(region string, skus []string) (map[string]float64, error) {
+			return client.prices(context.Background(), region, skus)
+		},
+	}})
+
+	if err == nil {
+		t.Fatal("expected a missing SKU to fail the refresh")
+	}
+	assertUnchanged(t, path, original)
+}
+
+func throttlingServer(t *testing.T, calls *int32, hit chan<- struct{}) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(calls, 1)
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusTooManyRequests)
+		if hit != nil {
+			select {
+			case hit <- struct{}{}:
+			default:
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAzureClientStopsWhileWaitingToRetry(t *testing.T) {
+	var calls int32
+	hit := make(chan struct{}, 1)
+	srv := throttlingServer(t, &calls, hit)
+
+	// No deadline, so the client reaches the retry wait.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := azureClientAt(srv.URL).prices(ctx, "westeurope", []string{"Standard_B2s"})
+		done <- err
+	}()
+
+	<-hit
+	select {
+	case err := <-done:
+		t.Fatalf("prices() returned before cancellation: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("prices() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancellation did not interrupt the retry wait")
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("api calls = %d, want 1", n)
+	}
+}
+
+func TestAzureClientFailsWhenRetryExceedsBudget(t *testing.T) {
+	var calls int32
+	srv := throttlingServer(t, &calls, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := azureClientAt(srv.URL).prices(ctx, "westeurope", []string{"Standard_B2s"})
+	if err == nil {
+		t.Fatal("expected the refresh to fail")
+	}
+	// The budget error distinguishes giving up from sleeping until the deadline.
+	if !strings.Contains(err.Error(), "budget") {
+		t.Errorf("error %q does not report the budget shortfall", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("api calls = %d, want 1 with no early retry", n)
+	}
+}
+
+func TestRunRefreshKeepsDataWhenAzureStaysThrottled(t *testing.T) {
+	var calls int32
+	srv := throttlingServer(t, &calls, nil)
+
+	path, original := writeCatalog(t, t.TempDir(), "azure.yaml", map[string]map[string]float64{
+		"westeurope": {"Standard_B2s": 0.0416},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	client := azureClientAt(srv.URL)
+	err := runRefresh([]catalogSpec{{
+		path: path, cloudName: "Azure VM", unit: "VM sizes",
+		regions: []string{"westeurope"}, skus: []string{"Standard_B2s"},
+		batchSize: azureBatchSize,
+		fetch: func(region string, skus []string) (map[string]float64, error) {
+			return client.prices(ctx, region, skus)
+		},
+	}})
+
+	if err == nil {
+		t.Fatal("expected sustained throttling to fail the refresh")
+	}
+	assertUnchanged(t, path, original)
+}
+
+func TestAzureRetryDelayHTTPDate(t *testing.T) {
+	client := &azureClient{retryWait: azureRetryWait, limiter: rate.NewLimiter(rate.Inf, 1)}
+
+	// http.TimeFormat drops sub-second precision, so the delay lands just under.
+	future := http.Header{"Retry-After": {time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)}}
+	if got := client.retryDelay(future); got <= 59*time.Minute || got > time.Hour {
+		t.Errorf("future date = %v, want just under an hour", got)
+	}
+
+	past := http.Header{"Retry-After": {time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)}}
+	if got := client.retryDelay(past); got != 0 {
+		t.Errorf("past date = %v, want 0 so the retry happens now", got)
+	}
+}
+
+func TestAzureClientDoesNotRetryUnusableRetryAfter(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Retry-After", "99999999999")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	_, err := azureClientAt(srv.URL).prices(context.Background(), "westeurope", []string{"Standard_B2s"})
+	if err == nil {
+		t.Fatal("expected an unusable retry-after to fail the refresh")
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("api calls = %d, want 1 with no retry", n)
+	}
+}
+
+func TestAzureClientStopsWhileWaitingForLimiter(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		fmt.Fprint(w, azurePageBody("", map[string]float64{"Standard_B2s": 0.0416}))
+	}))
+	defer srv.Close()
+
+	client := azureClientAt(srv.URL)
+	// One token, then an hour: the second request blocks inside the limiter.
+	client.limiter = rate.NewLimiter(rate.Every(time.Hour), 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, _, err := client.request(ctx, srv.URL); err != nil {
+		t.Fatalf("first request() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.request(ctx, srv.URL)
+		done <- err
+	}()
+
+	// Without pacing this call would reach the server instead of blocking.
+	select {
+	case err := <-done:
+		t.Fatalf("request() returned without waiting for the limiter: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("request() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancellation did not interrupt the limiter wait")
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("api calls = %d, want 1", n)
+	}
+}
+
+func TestRefreshTimeout(t *testing.T) {
+	want := map[string]time.Duration{
+		"azure": 12 * time.Minute,
+		"aws":   10 * time.Minute,
+		"all":   10 * time.Minute,
+		"gcp":   10 * time.Minute,
+	}
+	for target, d := range want {
+		if got := refreshTimeout(target); got != d {
+			t.Errorf("refreshTimeout(%q) = %v, want %v", target, got, d)
+		}
+	}
+}
+
 func TestAzureRetryDelay(t *testing.T) {
-	client := &azureClient{retryWait: azureRetryWait, retryCap: azureRetryCap}
+	client := &azureClient{retryWait: azureRetryWait, limiter: rate.NewLimiter(rate.Inf, 1)}
 
 	tests := []struct {
 		name   string
@@ -509,8 +767,13 @@ func TestAzureRetryDelay(t *testing.T) {
 	}{
 		{"azure header", http.Header{"X-Ms-Ratelimit-Retailprices-Retry-After": {"30"}}, 30 * time.Second},
 		{"standard header", http.Header{"Retry-After": {"5"}}, 5 * time.Second},
-		{"capped", http.Header{"X-Ms-Ratelimit-Retailprices-Retry-After": {"600"}}, azureRetryCap},
+		{"above a minute is not truncated", http.Header{"X-Ms-Ratelimit-Retailprices-Retry-After": {"600"}}, 600 * time.Second},
 		{"no header", http.Header{}, azureRetryWait},
+		{"not a number", http.Header{"Retry-After": {"later"}}, azureRetryWait},
+		{"negative", http.Header{"Retry-After": {"-5"}}, azureRetryWait},
+		{"zero is a delay, not a missing header", http.Header{"Retry-After": {"0"}}, 0},
+		{"overflows a duration", http.Header{"Retry-After": {"99999999999"}}, noRetry},
+		{"overflows an int", http.Header{"Retry-After": {"99999999999999999999999"}}, noRetry},
 	}
 
 	for _, tt := range tests {

@@ -13,8 +13,7 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/plan"
 )
 
-// overProvisionedPod clears the savings engine's $1 threshold on both
-// resources.
+// Clears the savings engine's $1 threshold on both resources.
 func overProvisionedPod(namespace, name, ownerKind, ownerName string) analyzer.PodEfficiency {
 	return analyzer.PodEfficiency{
 		Name:            name,
@@ -268,8 +267,7 @@ func TestClusterSavingsCannotBackAWorkloadPlan(t *testing.T) {
 	}
 }
 
-// mustBuild derives a ClusterInfo where every analyzed pod was also
-// discovered.
+// Every analyzed pod is also discovered, so coverage is complete.
 func mustBuild(t *testing.T, report *analyzer.CostReport) plan.Evidence {
 	t.Helper()
 	return mustBuildWith(t, report, infoFor(report.AllPods...))
@@ -296,7 +294,6 @@ func infoFor(pods ...analyzer.PodEfficiency) *collector.ClusterInfo {
 	return &collector.ClusterInfo{Nodes: []collector.NodeInfo{node}, TotalPods: len(pods)}
 }
 
-// The smallest recommendation would set the busiest pod below its own.
 func TestWorkloadCandidateTakesTheLargestRecommendation(t *testing.T) {
 	busy := overProvisionedPod("prod", "api-busy", "Deployment", "api")
 	busy.CPUP95Usage = 0.4
@@ -453,8 +450,7 @@ func TestCoverageAccountsForUnobservedExclusions(t *testing.T) {
 	assertCoverageInvariants(t, c)
 }
 
-// Attribution always holds. Discovery and exclusion counts only mean anything
-// with a cluster view, and must stay zero without one.
+// Attribution always holds; discovery and exclusion counts need a cluster view.
 func assertCoverageInvariants(t *testing.T, c podCoverage) {
 	t.Helper()
 	if c.PodsAttributed+c.PodsUnattributed != c.PodsAnalyzed {
@@ -569,7 +565,6 @@ func TestPeriodsAreReportedSeparately(t *testing.T) {
 	}
 }
 
-// Allocation savings must not read as verified against a bill.
 func TestSavingsSemanticsAreDeclared(t *testing.T) {
 	e := mustBuild(t, workloadReport(overProvisionedPod("prod", "api-1", "Deployment", "api")))
 	got := decodeWorkloadEvidence(t, e)
@@ -610,8 +605,7 @@ func closeTo(got, want float64) bool {
 	return math.Abs(got-want) <= 1e-9*math.Max(1, math.Abs(want))
 }
 
-// One pod means the candidate is that pod's own recommendation, so the figures
-// must agree exactly.
+// With one pod the candidate is that pod's own recommendation.
 func TestCandidateSavingsMatchAdvisorForASinglePod(t *testing.T) {
 	report := workloadReport(overProvisionedPod("prod", "api-1", "Deployment", "api"))
 	want := advisorPodSum(t, report)
@@ -715,7 +709,7 @@ func TestCandidateSavingsWithheldWhenReplicasWereNotAnalyzed(t *testing.T) {
 	}
 }
 
-// No request means no rate, and the candidate would raise the pod from zero.
+// The candidate would raise the pod from zero, which has no rate.
 func TestCandidateSavingsWithheldWhenAPodRequestsNothing(t *testing.T) {
 	sized := overProvisionedPod("prod", "api-a", "Deployment", "api")
 

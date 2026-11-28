@@ -132,7 +132,6 @@ var memAllocation = allocation{
 	cost:    func(p podCandidate) float64 { return p.MemCostMonthly },
 }
 
-// Pods with no resolved controller are listed as unattributed.
 func buildWorkloadEvidence(report *analyzer.CostReport, info *collector.ClusterInfo, savings *advisor.PotentialSavings, requestedPeriod string) (plan.Evidence, error) {
 	recommended := recommendationsByPod(savings)
 	discovered, scheduled, noRequests := discoveredPods(info)
@@ -162,8 +161,7 @@ func buildWorkloadEvidence(report *analyzer.CostReport, info *collector.ClusterI
 		}
 	}
 
-	// List fully excluded workloads, so they read as unanalyzed rather than
-	// absent.
+	// List fully excluded workloads so they read as unanalyzed, not absent.
 	if info != nil {
 		for _, w := range info.Workloads {
 			key := workloadKey(w.Namespace, w.Kind, w.Name)
@@ -243,9 +241,8 @@ func coverage(report *analyzer.CostReport, info *collector.ClusterInfo, schedule
 	return c
 }
 
-// summarize reduces the pods to one candidate per resource, since a controller
-// holds a single pod template. The largest recommendation is taken so no pod is
-// set below its own.
+// A controller holds one pod template, so the pods reduce to one candidate per
+// resource. The largest recommendation is taken so no pod is set below its own.
 func summarize(w *workloadCandidate, discovered int, inventoryKnown bool, advisorSavings float64) {
 	w.PodsAnalyzed = len(w.Pods)
 	w.PodsScheduled = discovered

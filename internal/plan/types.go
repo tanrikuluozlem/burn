@@ -8,19 +8,17 @@ import (
 	"time"
 )
 
-// SchemaVersion is refused, not migrated, when it does not match.
+// Unsupported schema versions are rejected.
 const SchemaVersion = 2
 
 const (
 	// SavingsTool records cluster-wide totals, never a single workload's.
 	SavingsTool = "savings"
-	// WorkloadsTool records per-workload candidates, which expected_savings
-	// must cite.
+	// WorkloadsTool records per-workload candidates, which expected_savings cites.
 	WorkloadsTool = "workloads"
 )
 
-// WorkloadEvidenceVersion is the layout this package can read; another version
-// is refused.
+// WorkloadEvidenceVersion is the layout this package can read.
 const WorkloadEvidenceVersion = 3
 
 // ReadinessInvestigation is the only readiness a plan may claim: container-level
@@ -28,20 +26,18 @@ const WorkloadEvidenceVersion = 3
 const ReadinessInvestigation = "investigation"
 
 type Plan struct {
-	SchemaVersion int       `json:"schema_version"`
-	ID            string    `json:"id"`
-	CreatedAt     time.Time `json:"created_at"`
-	Goal          string    `json:"goal"`
-	Readiness     string    `json:"readiness"`
-	Target        Target    `json:"target"`
-	Current       Resources `json:"current"`
-	Proposed      Resources `json:"proposed"`
-	// Null when the evidence supports no figure.
-	ExpectedSavings *Value `json:"expected_savings"`
-	Confidence      string `json:"confidence"`
+	SchemaVersion   int       `json:"schema_version"`
+	ID              string    `json:"id"`
+	CreatedAt       time.Time `json:"created_at"`
+	Goal            string    `json:"goal"`
+	Readiness       string    `json:"readiness"`
+	Target          Target    `json:"target"`
+	Current         Resources `json:"current"`
+	Proposed        Resources `json:"proposed"`
+	ExpectedSavings *Value    `json:"expected_savings"`
+	Confidence      string    `json:"confidence"`
 	// Copied from the cited workload and checked against it on validation.
-	Blockers []string `json:"blockers"`
-	// Copied from the evidence's not_collected list.
+	Blockers                 []string `json:"blockers"`
 	UnsupportedPrerequisites []string `json:"unsupported_prerequisites"`
 }
 
@@ -88,7 +84,6 @@ func EvidenceID(tool string, data []byte) string {
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
-// Hash identifies exact plan content, so a later edit is detectable.
 func (p *Plan) Hash() (string, error) {
 	data, err := json.Marshal(p)
 	if err != nil {

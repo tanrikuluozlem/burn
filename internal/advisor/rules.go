@@ -21,7 +21,7 @@ type SavingsOpportunity struct {
 	Pods           []PodSaving
 }
 
-// PodSaving is the per-pod right-sizing output. Zero means no recommendation.
+// PodSaving is one pod's right-sizing output; zero means no recommendation.
 type PodSaving struct {
 	Namespace                string
 	Name                     string

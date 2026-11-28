@@ -10,8 +10,7 @@ import (
 
 var confidenceLevels = map[string]bool{"low": true, "medium": true, "high": true}
 
-// The field each plan number must come from; a fixed suffix stops a plausible
-// value being read off a neighbour.
+// Required evidence field for each plan value.
 const (
 	pathCurrentCPU   = "current_cpu_millicores"
 	pathCurrentMem   = "current_mem_bytes"
@@ -20,8 +19,8 @@ const (
 	pathSavings      = "candidate_allocation_savings_monthly"
 )
 
-// Plan and evidence numbers arrive by different arithmetic and through JSON, so
-// agreement is a tolerance. The absolute floor covers values near zero.
+// Numbers arrive by different arithmetic, so agreement is a tolerance. The
+// absolute floor covers values near zero.
 const (
 	relTolerance = 1e-9
 	absTolerance = 1e-9
@@ -52,8 +51,8 @@ func (a anchor) String() string {
 	return fmt.Sprintf("%s workloads.%d", a.evidenceID, a.index)
 }
 
-// Validate resolves every number back to the evidence it cites and confirms
-// that evidence is about the target workload.
+// Validate resolves every number to the evidence it cites and confirms that
+// evidence is about the target workload.
 func Validate(p *Plan, ledger []Evidence) error {
 	if p.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported schema version %d, want %d", p.SchemaVersion, SchemaVersion)

@@ -17,8 +17,7 @@ func record(tool, data string) Evidence {
 	}
 }
 
-// workloadsDoc holds three shapes: fully measured, measured but unpriceable,
-// and not measured at all.
+// Three shapes: fully measured, measured but unpriceable, not measured.
 const workloadsDoc = `{"version":3,` +
 	`"not_collected":["hpa","rollout_strategy"],` +
 	`"workloads":[` +
@@ -41,8 +40,7 @@ func at(e Evidence, path string) EvidenceRef {
 	return EvidenceRef{EvidenceID: e.ID, Path: path}
 }
 
-// validPlan returns a plan whose every number resolves against the ledger.
-// Tests mutate one field at a time.
+// Tests mutate one field of this at a time.
 func validPlan() (*Plan, []Evidence) {
 	workloads := record(WorkloadsTool, workloadsDoc)
 	ledger := []Evidence{workloads}
@@ -136,8 +134,7 @@ func TestValidateRejectsClusterSavingsForWorkloadTarget(t *testing.T) {
 	}
 }
 
-// A number lifted from another workload resolves and matches; only the identity
-// check catches it.
+// The number resolves and matches; only the identity check catches it.
 func TestValidateRejectsMismatchedWorkloadIdentity(t *testing.T) {
 	p, ledger := validPlan()
 	p.Target = Target{Kind: "StatefulSet", Namespace: "db", Name: "pg"}
@@ -347,7 +344,6 @@ func TestValidateRejectsNonFiniteAmount(t *testing.T) {
 	}
 }
 
-// A recomputed candidate will not reproduce the recorded value bit for bit.
 func TestValidateToleratesFloatingPointNoise(t *testing.T) {
 	p, ledger := validPlan()
 	p.ExpectedSavings.Amount = 127.4 + 1e-12
@@ -398,7 +394,6 @@ func TestEvidenceIDSeparatesToolFromData(t *testing.T) {
 	}
 }
 
-// A repeated id would index over the first record.
 func TestValidateRejectsDuplicateEvidenceIDs(t *testing.T) {
 	p, ledger := validPlan()
 	ledger = append(ledger, ledger[0])
@@ -491,7 +486,6 @@ func TestHashChangesWithContent(t *testing.T) {
 	}
 }
 
-// A model must not be able to supply an executable string.
 func TestPlanCarriesNoExecutableField(t *testing.T) {
 	forbidden := []string{"command", "cmd", "exec", "script", "shell", "action"}
 

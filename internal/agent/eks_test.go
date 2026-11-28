@@ -11,10 +11,7 @@ import (
 	"github.com/tanrikuluozlem/burn/internal/pricing"
 )
 
-// Run against a real cluster with:
-//
-//	BURN_EKS_TEST=1 go test ./internal/agent/ -run TestEKS -v
-//
+// BURN_EKS_TEST=1 go test ./internal/agent/ -run TestEKS -v
 // Optional: BURN_EKS_KUBECONFIG, BURN_EKS_CONTEXT, BURN_EKS_PROMETHEUS,
 // BURN_EKS_PERIOD. Lists cluster objects only, and logs workload names and
 // resource numbers but never kubeconfig contents, credentials, or pod specs.
@@ -82,8 +79,7 @@ func TestEKSWorkloadEvidence(t *testing.T) {
 		if len(w.Pods) > 0 {
 			curCPU, curMem = w.Pods[0].CPURequestMillicores, w.Pods[0].MemRequestBytes
 		}
-		// advisor is the per-pod sum burn analyze reports; candidate is the
-		// figure for the single candidate.
+		// advisor is the per-pod sum burn analyze reports.
 		t.Logf("workloads[%d] %s/%s/%s pods=%d/%d/%d uniform=%t cpu %dm->%v mem %dB->%v advisor=%v candidate=%v blockers=%v",
 			i, w.Namespace, w.Kind, w.Name,
 			w.PodsWithRecommendation, w.PodsAnalyzed, w.PodsScheduled, w.CurrentRequestsUniform,
@@ -153,7 +149,6 @@ func TestEKSWorkloadEvidence(t *testing.T) {
 		pods, len(got.Unattributed))
 }
 
-// The evidence has to fit in a model context window.
 func TestEKSEvidenceSize(t *testing.T) {
 	if os.Getenv("BURN_EKS_TEST") != "1" {
 		t.Skip("set BURN_EKS_TEST=1 to run against a real cluster")
